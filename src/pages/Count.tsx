@@ -203,7 +203,7 @@ export default function Count() {
   };
 
   const onImageMove = (x: number, y: number) => {
-    if (tool === "pan" || tool === "add") {
+    if (tool === "add") {
       setHoveredId(null);
       return;
     }
@@ -480,7 +480,12 @@ export default function Count() {
               mode={tool === "pan" ? "pan" : "crosshair"}
               onImageClick={onImageClick}
               onImageMove={onImageMove}
-              cursor={tool === "add" ? "crosshair" : tool === "delete" ? "not-allowed" : tool === "review" ? "pointer" : undefined}
+              cursor={
+                tool === "add" ? "crosshair" :
+                tool === "delete" ? "not-allowed" :
+                tool === "review" ? "pointer" :
+                hoveredId != null ? "pointer" : undefined
+              }
               controls={
                 <div className="pointer-events-auto flex items-center gap-2 rounded-[4px] border border-ink-600/80 bg-ink-900/80 px-2.5 py-1 text-2xs text-ink-200 backdrop-blur">
                   <MousePointer2 size={11} />

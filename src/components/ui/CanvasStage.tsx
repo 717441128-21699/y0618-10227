@@ -137,7 +137,7 @@ export function CanvasStage({
 
   const handlePointerUp = (e: React.PointerEvent) => {
     panRef.current = null;
-    if (downRef.current && !downRef.current.moved && onImageClick && mode === "crosshair") {
+    if (downRef.current && !downRef.current.moved && onImageClick) {
       const { x, y } = toImageCoords(e.clientX, e.clientY);
       onImageClick(x, y, e);
     }

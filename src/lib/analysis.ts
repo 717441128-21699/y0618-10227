@@ -17,6 +17,7 @@ export function aspectRatioOf(d: Detection): number {
 }
 
 export function passesFilter(d: Detection, f: MorphFilter): boolean {
+  if (d.status === "manual" || d.status === "pending") return true;
   const ar = aspectRatioOf(d);
   return (
     d.area >= f.minArea &&

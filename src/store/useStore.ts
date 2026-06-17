@@ -80,6 +80,7 @@ function loadPersistedMeta(): Partial<PersistShape> {
 async function hydrateFromBlobStore(meta: Partial<PersistShape>): Promise<PersistShape> {
   const tiles: Record<string, Tile[]> = { ...(meta.tiles ?? {}) };
   const panoramas: Record<string, Panorama | null> = { ...(meta.panoramas ?? {}) };
+  let hydrateFailures = 0;
 
   const tasks: Promise<void>[] = [];
   for (const expId of Object.keys(tiles)) {
@@ -91,6 +92,8 @@ async function hydrateFromBlobStore(meta: Partial<PersistShape>): Promise<Persis
         getBlob(expId, "tile", t.id).then((dataUrl) => {
           if (dataUrl) {
             list[i] = { ...t, dataUrl };
+          } else {
+            hydrateFailures++;
           }
         })
       );
@@ -101,12 +104,22 @@ async function hydrateFromBlobStore(meta: Partial<PersistShape>): Promise<Persis
     if (p && !p.dataUrl) {
       tasks.push(
         getBlob(expId, "panorama", "panorama").then((dataUrl) => {
-          if (dataUrl) panoramas[expId] = { ...p, dataUrl };
+          if (dataUrl) {
+            panoramas[expId] = { ...p, dataUrl };
+          } else {
+            hydrateFailures++;
+          }
         })
       );
     }
   }
   await Promise.all(tasks);
+
+  if (hydrateFailures > 0) {
+    pushStorageWarning(
+      `有 ${hydrateFailures} 张图片未能从浏览器存储中恢复，可能是浏览器数据被清理。请确认数据完整性，如有缺失请从项目包恢复。`
+    );
+  }
 
   return {
     experiments: meta.experiments ?? [],
@@ -143,7 +156,8 @@ async function persist(state: PersistShape) {
     // --- 1) Sync blobs: persist tile/panorama dataUrls to IDB, build meta version ---
     const metaTiles: Record<string, Tile[]> = {};
     const metaPanoramas: Record<string, Panorama | null> = {};
-    const blobTasks: Promise<unknown>[] = [];
+    const blobTasks: Promise<boolean>[] = [];
+    let blobFailures = 0;
 
     const allExpIds = new Set<string>();
     state.experiments.forEach((e) => allExpIds.add(e.id));
@@ -154,8 +168,18 @@ async function persist(state: PersistShape) {
       for (let i = 0; i < list.length; i++) {
         const t = list[i];
         if (t.dataUrl) {
-          blobTasks.push(putBlob(expId, "tile", t.id, t.dataUrl).catch(() => {}));
-          metaList[i] = { ...t, dataUrl: "" };
+          metaList[i] = { ...t };
+          blobTasks.push(
+            putBlob(expId, "tile", t.id, t.dataUrl)
+              .then(() => {
+                metaList[i].dataUrl = "";
+                return true;
+              })
+              .catch(() => {
+                blobFailures++;
+                return false;
+              })
+          );
         } else {
           metaList[i] = t;
         }
@@ -165,8 +189,19 @@ async function persist(state: PersistShape) {
     for (const expId of Object.keys(state.panoramas)) {
       const p = state.panoramas[expId];
       if (p && p.dataUrl) {
-        blobTasks.push(putBlob(expId, "panorama", "panorama", p.dataUrl).catch(() => {}));
-        metaPanoramas[expId] = { ...p, dataUrl: "" };
+        const metaPano: Panorama = { ...p };
+        metaPanoramas[expId] = metaPano;
+        blobTasks.push(
+          putBlob(expId, "panorama", "panorama", p.dataUrl)
+            .then(() => {
+              metaPano.dataUrl = "";
+              return true;
+            })
+            .catch(() => {
+              blobFailures++;
+              return false;
+            })
+        );
       } else {
         metaPanoramas[expId] = p;
       }
@@ -207,6 +242,13 @@ async function persist(state: PersistShape) {
 
     await Promise.all([...blobTasks, ...cleanup]);
 
+    if (blobFailures > 0 && Date.now() - lastLocalTrimWarnAt > 60_000) {
+      lastLocalTrimWarnAt = Date.now();
+      pushStorageWarning(
+        `有 ${blobFailures} 张大图未能成功保存到浏览器后台存储，请立即在首页「导出项目包」备份数据后再刷新页面，避免数据丢失。`
+      );
+    }
+
     // --- 2) Write meta to localStorage ---
     const metaObj: PersistShape = {
       experiments: state.experiments,
@@ -220,23 +262,12 @@ async function persist(state: PersistShape) {
     try {
       localStorage.setItem(STORAGE_KEY, metaStr);
     } catch (err) {
-      // If localStorage itself is bloated, do NOT strip blobs again (they already are) but warn user.
       if (Date.now() - lastLocalTrimWarnAt > 60_000) {
         lastLocalTrimWarnAt = Date.now();
         const est = new Blob([metaStr]).size;
         pushStorageWarning(
           `本地存储写入失败（元数据约 ${formatSize(est)}），请尽快在首页导出项目包备份，或清理不活跃实验。`
         );
-      }
-      try {
-        // last resort: drop old panorama meta entries that already have blobs backing them
-        const trimmed: PersistShape = {
-          ...metaObj,
-          panoramas: {},
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-      } catch {
-        // give up silently - blob store already has the data; we'll lose filter metadata worst-case
       }
     }
 

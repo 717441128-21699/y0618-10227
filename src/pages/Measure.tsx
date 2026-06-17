@@ -11,6 +11,7 @@ import {
   FileSpreadsheet,
   Eye,
   AlertTriangle,
+  SearchX,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Toggle } from "@/components/ui/Toggle";
@@ -52,6 +53,12 @@ const STATUS_BADGE: Record<DetectionStatus, { label: string; cls: string }> = {
   auto: { label: "自动", cls: "bg-fluor/10 text-fluor-glow" },
   manual: { label: "人工", cls: "bg-amber/15 text-amber-glow" },
   pending: { label: "待确认", cls: "bg-red/15 text-red" },
+};
+
+const STATUS_ORIGIN: Record<DetectionStatus, string> = {
+  auto: "自动检测",
+  manual: "人工标记",
+  pending: "待确认",
 };
 
 const STATUS_WEIGHT: Record<DetectionStatus, number> = {
@@ -204,7 +211,7 @@ export default function Measure() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl px-6 py-6">
-          {filtered.length === 0 ? (
+          {detections.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-center text-sm text-ink-300">
               <Ruler size={28} className="mb-3 text-ink-500" />
               暂无可测量的目标，请先在计数模块完成检测
@@ -270,38 +277,51 @@ export default function Measure() {
                 <BarChart3 size={14} className="text-fluor" />
                 <span className="field-label">参数分布（当前筛选）</span>
               </div>
-              <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <HistogramCard
-                  title="面积分布"
-                  unit={uA}
-                  hist={areaHist}
-                  mean={A(areaStats.mean)}
-                  median={A(areaStats.median)}
-                  std={A(areaStats.std)}
-                  color="#2dd4bf"
-                  transform={A}
-                />
-                <HistogramCard
-                  title="圆度分布"
-                  unit=""
-                  hist={circHist}
-                  mean={circStats.mean}
-                  median={circStats.median}
-                  std={circStats.std}
-                  color="#fbbf24"
-                  transform={(v) => v}
-                />
-                <HistogramCard
-                  title="长短轴比分布"
-                  unit=""
-                  hist={arHist}
-                  mean={arStats.mean}
-                  median={arStats.median}
-                  std={arStats.std}
-                  color="#a78bfa"
-                  transform={(v) => v}
-                />
-              </div>
+              {filtered.length === 0 ? (
+                <div className="mb-6 rounded-lg border border-dashed border-ink-600/70 bg-ink-900/30 py-16 text-center text-sm text-ink-400">
+                  <SearchX size={20} className="mx-auto mb-2 text-ink-500" />
+                  当前「{STATUS_LABEL[statusFilter]}」状态下无匹配目标
+                  <button
+                    className="btn mt-4"
+                    onClick={() => setStatusFilter("all")}
+                  >
+                    切换到全部
+                  </button>
+                </div>
+              ) : (
+                <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <HistogramCard
+                    title="面积分布"
+                    unit={uA}
+                    hist={areaHist}
+                    mean={A(areaStats.mean)}
+                    median={A(areaStats.median)}
+                    std={A(areaStats.std)}
+                    color="#2dd4bf"
+                    transform={A}
+                  />
+                  <HistogramCard
+                    title="圆度分布"
+                    unit=""
+                    hist={circHist}
+                    mean={circStats.mean}
+                    median={circStats.median}
+                    std={circStats.std}
+                    color="#fbbf24"
+                    transform={(v) => v}
+                  />
+                  <HistogramCard
+                    title="长短轴比分布"
+                    unit=""
+                    hist={arHist}
+                    mean={arStats.mean}
+                    median={arStats.median}
+                    std={arStats.std}
+                    color="#a78bfa"
+                    transform={(v) => v}
+                  />
+                </div>
+              )}
 
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -315,67 +335,74 @@ export default function Measure() {
                 <span className="mono text-2xs text-ink-400">点击表头排序</span>
               </div>
               <div className="panel-raised overflow-hidden">
-                <div className="max-h-[460px] overflow-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 z-10 bg-ink-850/95 backdrop-blur">
-                      <tr className="mono text-2xs uppercase tracking-wider text-ink-300">
-                        <Th label="#" k="id" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                        <Th label="状态" k="status" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                        <Th label={`面积 (${uA})`} k="area" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <Th label={`周长 (${uL})`} k="perimeter" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <Th label={`长轴 (${uL})`} k="majorAxis" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <Th label={`短轴 (${uL})`} k="minorAxis" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <th className="px-3 py-2 text-right">长短轴比</th>
-                        <Th label="圆度" k="circularity" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <Th label="角度°" k="angle" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
-                        <th className="px-3 py-2 text-right">来源</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sorted.map((d, i) => (
-                        <tr
-                          key={d.id}
-                          className={cn(
-                            "border-t border-ink-700/40 transition hover:bg-fluor/5",
-                            i % 2 === 1 && "bg-ink-900/20",
-                            d.status === "pending" && "!bg-red/5"
-                          )}
-                        >
-                          <td className="mono px-3 py-1.5 text-ink-400">{i + 1}</td>
-                          <td className="px-3 py-1.5">
-                            <span
-                              className={cn(
-                                "mono inline-flex items-center rounded px-1.5 py-0.5 text-2xs",
-                                STATUS_BADGE[d.status].cls
-                              )}
-                            >
-                              {d.status === "pending" && <AlertTriangle size={9} className="mr-0.5" />}
-                              {STATUS_BADGE[d.status].label}
-                            </span>
-                          </td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(A(d.area), 0)}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.perimeter))}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.majorAxis))}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.minorAxis))}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-200">{fmt(aspectRatioOf(d), 2)}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-fluor-glow">{fmt(d.circularity, 3)}</td>
-                          <td className="mono px-3 py-1.5 text-right tabular text-ink-300">{fmt((d.angle * 180) / Math.PI)}</td>
-                          <td className="px-3 py-1.5 text-right">
-                            <span className="mono rounded bg-ink-700/30 px-1.5 py-0.5 text-2xs text-ink-200">
-                              {d.manual ? "手动" : "自动"}
-                            </span>
-                          </td>
+                {filtered.length === 0 ? (
+                  <div className="py-20 text-center text-sm text-ink-400">
+                    <SearchX size={20} className="mx-auto mb-2 text-ink-500" />
+                    「{STATUS_LABEL[statusFilter]}」状态下无数据
+                  </div>
+                ) : (
+                  <div className="max-h-[460px] overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 z-10 bg-ink-850/95 backdrop-blur">
+                        <tr className="mono text-2xs uppercase tracking-wider text-ink-300">
+                          <Th label="#" k="id" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                          <Th label="状态" k="status" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                          <Th label={`面积 (${uA})`} k="area" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <Th label={`周长 (${uL})`} k="perimeter" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <Th label={`长轴 (${uL})`} k="majorAxis" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <Th label={`短轴 (${uL})`} k="minorAxis" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <th className="px-3 py-2 text-right">长短轴比</th>
+                          <Th label="圆度" k="circularity" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <Th label="角度°" k="angle" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
+                          <th className="px-3 py-2 text-right">来源</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {sorted.map((d, i) => (
+                          <tr
+                            key={d.id}
+                            className={cn(
+                              "border-t border-ink-700/40 transition hover:bg-fluor/5",
+                              i % 2 === 1 && "bg-ink-900/20",
+                              d.status === "pending" && "!bg-red/5"
+                            )}
+                          >
+                            <td className="mono px-3 py-1.5 text-ink-400">{i + 1}</td>
+                            <td className="px-3 py-1.5">
+                              <span
+                                className={cn(
+                                  "mono inline-flex items-center rounded px-1.5 py-0.5 text-2xs",
+                                  STATUS_BADGE[d.status].cls
+                                )}
+                              >
+                                {d.status === "pending" && <AlertTriangle size={9} className="mr-0.5" />}
+                                {STATUS_BADGE[d.status].label}
+                              </span>
+                            </td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(A(d.area), 0)}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.perimeter))}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.majorAxis))}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.minorAxis))}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-200">{fmt(aspectRatioOf(d), 2)}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-fluor-glow">{fmt(d.circularity, 3)}</td>
+                            <td className="mono px-3 py-1.5 text-right tabular text-ink-300">{fmt((d.angle * 180) / Math.PI)}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              <span className="mono rounded bg-ink-700/30 px-1.5 py-0.5 text-2xs text-ink-200">
+                                {STATUS_ORIGIN[d.status]}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               <div className="mt-4 flex items-center gap-2 rounded-[4px] border border-ink-700/60 bg-ink-900/30 px-4 py-3">
                 <Download size={14} className="text-ink-300" />
                 <span className="text-2xs text-ink-300">
-                  导出 CSV 包含当前筛选的 {filtered.length} 个目标的形态参数，状态列单独列出待确认；带标注图像可在「对比与导出」页面生成。
+                  导出 CSV 包含当前筛选的 {filtered.length} 个目标的形态参数，状态列单独列出待确认；<strong className="text-ink-200">人工标记或标为待确认的目标会始终保留在结果中</strong>，不受形态学参数筛选范围影响，也不会被后续重新检测覆盖。
                 </span>
               </div>
             </>
