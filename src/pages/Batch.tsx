@@ -56,6 +56,9 @@ export default function Batch() {
   const [rows, setRows] = useState<Record<string, RowProgress>>({});
   const [results, setResults] = useState<BatchResult[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [beforeCounts, setBeforeCounts] = useState<
+    Record<string, { total: number; auto: number; manual: number; pending: number }>
+  >({});
   const cancelRef = useRef(false);
 
   const expList = useMemo(() => {
@@ -107,6 +110,18 @@ export default function Batch() {
     setRunning(true);
     setResults([]);
     setRows({});
+    // Record per-exp counts before the run for QC delta
+    const before: typeof beforeCounts = {};
+    for (const id of Array.from(selectedIds)) {
+      const list = detections[id] ?? [];
+      before[id] = {
+        total: list.length,
+        auto: list.filter((d) => d.status === "auto").length,
+        manual: list.filter((d) => d.status === "manual").length,
+        pending: list.filter((d) => d.status === "pending").length,
+      };
+    }
+    setBeforeCounts(before);
     // Seed row states
     const seedRows: Record<string, RowProgress> = {};
     for (const id of Array.from(selectedIds)) {
@@ -327,6 +342,15 @@ export default function Batch() {
                       })
                     }
                     onOpenStitch={() => navigate(`/stitch/${row.exp.id}`)}
+                    onOpenCount={() => navigate(`/count/${row.exp.id}`)}
+                    onOpenMeasure={() => navigate(`/measure/${row.exp.id}`)}
+                    beforeCounts={beforeCounts[row.exp.id]}
+                    afterCounts={{
+                      total: detections[row.exp.id]?.length ?? 0,
+                      auto: detections[row.exp.id]?.filter((d) => d.status === "auto").length ?? 0,
+                      manual: detections[row.exp.id]?.filter((d) => d.status === "manual").length ?? 0,
+                      pending: detections[row.exp.id]?.filter((d) => d.status === "pending").length ?? 0,
+                    }}
                   />
                 ))}
               </tbody>
@@ -370,6 +394,10 @@ function ExpRow({
   expanded,
   onToggleExpand,
   onOpenStitch,
+  onOpenCount,
+  onOpenMeasure,
+  beforeCounts,
+  afterCounts,
 }: {
   row: {
     exp: Experiment;
@@ -385,6 +413,10 @@ function ExpRow({
   expanded: boolean;
   onToggleExpand: () => void;
   onOpenStitch: () => void;
+  onOpenCount: () => void;
+  onOpenMeasure: () => void;
+  beforeCounts?: { total: number; auto: number; manual: number; pending: number };
+  afterCounts?: { total: number; auto: number; manual: number; pending: number };
 }) {
   const busy = !!progress && progress.stage !== "pending" && progress.stage !== "done" && progress.stage !== "error";
   const error = progress?.error || result?.error;
@@ -478,7 +510,45 @@ function ExpRow({
       {expanded && (
         <tr className="border-t border-ink-800/50 bg-ink-900/50">
           <td colSpan={7} className="px-6 py-3">
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
+              {beforeCounts && afterCounts && (result || error) && (
+                <div>
+                  <div className="mono mb-1.5 text-2xs uppercase tracking-wider text-ink-400">质控总览</div>
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {([
+                      ["总数", "total", "#22d3ee"],
+                      ["自动", "auto", "#2dd4bf"],
+                      ["人工", "manual", "#f59e0b"],
+                      ["待确认", "pending", "#ef4444"],
+                    ] as const).map(([label, key, color]) => {
+                      const delta = afterCounts[key] - beforeCounts[key];
+                      const deltaStr = delta === 0 ? "±0" : delta > 0 ? `+${delta}` : `${delta}`;
+                      const deltaColor =
+                        delta === 0 ? "text-ink-400" : delta > 0 ? "text-emerald-400" : "text-amber-400";
+                      return (
+                        <div
+                          key={key}
+                          className="rounded-[3px] border border-ink-700/60 bg-ink-850/60 px-2.5 py-2"
+                        >
+                          <div className="mono flex items-center justify-between text-2xs text-ink-400">
+                            <span>
+                              <span
+                                className="mr-1 inline-block h-1.5 w-1.5 rounded-full"
+                                style={{ background: color }}
+                              />
+                              {label}
+                            </span>
+                            <span className={`tabular font-medium ${deltaColor}`}>{deltaStr}</span>
+                          </div>
+                          <div className="mono mt-0.5 text-right text-xs tabular text-ink-100">
+                            {beforeCounts[key]} → <span className="font-semibold">{afterCounts[key]}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {progress && (
                 <div className="flex items-start gap-2">
                   <span className="mono text-2xs uppercase tracking-wider text-ink-400">最新消息</span>
@@ -487,7 +557,7 @@ function ExpRow({
               )}
               {error && (
                 <div className="flex items-start gap-2">
-                  <span className="mono text-2xs uppercase tracking-wider text-red">错误信息</span>
+                  <span className="mono text-2xs uppercase tracking-wider text-red">失败原因</span>
                   <span className="mono whitespace-pre-wrap break-words text-2xs text-red">{error}</span>
                 </div>
               )}
@@ -509,7 +579,21 @@ function ExpRow({
               )}
               <div className="flex items-center gap-2">
                 <button className="btn h-7 px-2 text-2xs" onClick={onOpenStitch}>
-                  打开实验
+                  拼接页
+                  <ArrowRight size={12} />
+                </button>
+                <button className="btn h-7 px-2 text-2xs" onClick={onOpenCount} disabled={!row.hasPanorama}>
+                  <Target size={11} />
+                  计数页
+                  <ArrowRight size={12} />
+                </button>
+                <button
+                  className="btn h-7 px-2 text-2xs"
+                  onClick={onOpenMeasure}
+                  disabled={(row.detectionCount ?? 0) === 0}
+                >
+                  <Ruler size={11} />
+                  测量页
                   <ArrowRight size={12} />
                 </button>
               </div>

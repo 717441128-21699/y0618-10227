@@ -80,7 +80,7 @@ export async function runCountForExp(
     watershed: opts.watershed ?? true,
   });
   onProgress?.(0.9, "合并标记");
-  const preserved = priorDetections.filter((d) => d.manual || d.status === "pending");
+  const preserved = priorDetections.filter((d) => d.status === "manual" || d.status === "pending");
   let nextId = auto.reduce((m, d) => Math.max(m, d.id), -1) + 1;
   const manualList: Detection[] = preserved.map((d) => ({ ...d, id: nextId++ }));
   const merged = [...auto, ...manualList];

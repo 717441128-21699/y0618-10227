@@ -10,7 +10,7 @@ import type {
   TargetType,
 } from "@/types";
 import { GROUP_COLORS } from "@/types";
-import { defaultFilter } from "@/lib/analysis";
+import { defaultFilter, ensureHistory, appendAudit, auditEvent } from "@/lib/analysis";
 import {
   deleteBlobsByExp,
   deleteBlob,
@@ -50,11 +50,11 @@ const WARN_QUOTA_PCT = 0.85;
 const HARD_LOCAL_LIMIT_BYTES = 3.5 * 1024 * 1024; // ~3.5MB localStorage upper bound
 
 function migrateDetection(d: Detection): Detection {
-  if (d.status) return d;
-  return {
-    ...d,
-    status: d.manual ? "manual" : "auto",
-  };
+  let out = d;
+  if (!out.status) {
+    out = { ...out, status: d.manual ? "manual" : "auto" };
+  }
+  return ensureHistory(out);
 }
 
 function migrateMeta(m: Partial<PersistShape>): Partial<PersistShape> {
@@ -295,7 +295,7 @@ interface StoreState extends PersistShape {
 
   setPanorama: (expId: string, p: Panorama | null) => void;
   setDetections: (expId: string, dets: Detection[]) => void;
-  addManualDetection: (expId: string, det: Omit<Detection, "id" | "manual" | "status">) => void;
+  addManualDetection: (expId: string, det: Omit<Detection, "id" | "manual" | "status" | "history">) => void;
   updateDetectionStatus: (expId: string, id: number, status: DetectionStatus) => void;
   removeDetection: (expId: string, id: number) => void;
   clearDetections: (expId: string) => void;
@@ -492,7 +492,13 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const list = s.detections[expId] ?? [];
       const maxId = list.reduce((m, d) => Math.max(m, d.id), -1);
-      const newDet: Detection = { ...det, id: maxId + 1, manual: true, status: "manual" };
+      const newDet: Detection = {
+        ...det,
+        id: maxId + 1,
+        manual: true,
+        status: "manual",
+        history: [auditEvent("manual-add")],
+      };
       const next = { ...s, detections: { ...s.detections, [expId]: [...list, newDet] } };
       persist(next as PersistShape);
       return next;
@@ -501,7 +507,17 @@ export const useStore = create<StoreState>((set, get) => ({
 
   updateDetectionStatus: (expId, id, status) => {
     set((s) => {
-      const list = (s.detections[expId] ?? []).map((d) => (d.id === id ? { ...d, status } : d));
+      const list = (s.detections[expId] ?? []).map((d) => {
+        if (d.id !== id) return d;
+        if (d.status === status) return d;
+        const actionMap: Record<string, "mark-pending" | "mark-manual" | "revert-auto" | "manual-add"> = {
+          "pending": "mark-pending",
+          "manual": "mark-manual",
+          "auto": "revert-auto",
+        };
+        const action = actionMap[status] ?? "revert-auto";
+        return { ...appendAudit(d, action), status };
+      });
       const next = { ...s, detections: { ...s.detections, [expId]: list } };
       persist(next as PersistShape);
       return next;
@@ -577,7 +593,7 @@ export const useStore = create<StoreState>((set, get) => ({
       for (const [oldId, d] of Object.entries(input.detections)) {
         const nid = idMap[oldId];
         if (!nid) continue;
-        detections[nid] = d.map(migrateDetection);
+        detections[nid] = d.map((x) => appendAudit(migrateDetection(x), "import", "从项目包导入"));
       }
       const filters: PersistShape["filters"] = {};
       for (const [oldId, f] of Object.entries(input.filters)) {

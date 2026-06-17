@@ -19,7 +19,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { useStore } from "@/store/useStore";
 import { loadImageEl } from "@/lib/image";
-import { defaultFilter, filterDetections, summaryStats, aspectRatioOf, fmt } from "@/lib/analysis";
+import { defaultFilter, filterDetections, summaryStats, aspectRatioOf, fmt, AUDIT_LABEL } from "@/lib/analysis";
 import type { Experiment, Panorama, Detection, MorphFilter } from "@/types";
 import { downloadCsv, downloadBlob, sanitizeName } from "@/lib/export";
 import { cn } from "@/lib/utils";
@@ -670,6 +670,37 @@ function buildGroupSummary(groups: GroupData[]): { rows: unknown[][]; table: str
   return { rows, table: renderTable(rows), qcRows, qcTable: renderTable(qcRows) };
 }
 
+function buildAuditSummaryHtml(groups: GroupData[]): string {
+  const actionOrder: Array<"auto-detect" | "manual-add" | "mark-pending" | "mark-manual" | "revert-auto" | "delete" | "import"> = [
+    "auto-detect", "manual-add", "mark-pending", "mark-manual", "revert-auto", "delete", "import",
+  ];
+  const esc = (v: unknown) => escapeHtml(String(v));
+  const fmtTime = (t: number) => new Date(t).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const header = ["实验组", ...actionOrder.map(a => AUDIT_LABEL[a]), "首次操作", "最近操作"];
+  const rows: unknown[][] = [header];
+  for (const g of groups) {
+    const counters: Record<string, number> = {};
+    let minAt: number | null = null;
+    let maxAt: number | null = null;
+    for (const d of g.detections) {
+      for (const ev of (d.history ?? [])) {
+        counters[ev.action] = (counters[ev.action] ?? 0) + 1;
+        if (minAt == null || ev.at < minAt) minAt = ev.at;
+        if (maxAt == null || ev.at > maxAt) maxAt = ev.at;
+      }
+    }
+    rows.push([
+      g.exp.name,
+      ...actionOrder.map(a => counters[a] ?? 0),
+      minAt != null ? fmtTime(minAt) : "—",
+      maxAt != null ? fmtTime(maxAt) : "—",
+    ]);
+  }
+  return `<table class="ms-table"><thead><tr>${rows[0].map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.slice(1).map(r => `<tr>${r.map(c => `<td>${esc(String(c))}</td>`).join("")}</tr>`).join("") +
+    "</tbody></table>";
+}
+
 function drawHistograms(groups: GroupData[]): Promise<string> {
   const metrics = [
     { key: "area", title: "面积", color: "#2dd4bf", valuesOf: (d: Detection) => d.area },
@@ -909,6 +940,13 @@ async function renderReportHtml(
   ${table}
 </section>`;
 
+  const auditSectionHtml = tpl === "qc"
+    ? `<section class="ms-section">
+  <h2>复核摘要</h2>
+  ${buildAuditSummaryHtml(groups)}
+</section>`
+    : "";
+
   const distSectionHtml = showDists ? `<section class="ms-section">
   <h2>形态参数分布</h2>
   ${histograms}
@@ -1004,6 +1042,7 @@ async function renderReportHtml(
 </section>
 
 ${statsSectionHtml}
+${auditSectionHtml}
 ${distSectionHtml}
 ${panosSectionHtml}
 ${detailSectionHtml}

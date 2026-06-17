@@ -7,13 +7,17 @@ interface CanvasStageProps {
   height: number;
   draw: (ctx: CanvasRenderingContext2D) => void;
   repaintKey?: unknown;
-  mode?: "pan" | "crosshair";
+  mode?: "pan" | "crosshair" | "marquee";
   onImageClick?: (x: number, y: number, e: React.MouseEvent) => void;
   onImageMove?: (x: number, y: number) => void;
   cursor?: string;
   className?: string;
   overlay?: React.ReactNode;
   controls?: React.ReactNode;
+  marqueeRect?: { x0: number; y0: number; x1: number; y1: number } | null;
+  onMarqueeStart?: (x: number, y: number) => void;
+  onMarqueeMove?: (x: number, y: number) => void;
+  onMarqueeEnd?: (rect: { x0: number; y0: number; x1: number; y1: number }) => void;
 }
 
 export function CanvasStage({
@@ -28,6 +32,10 @@ export function CanvasStage({
   className,
   overlay,
   controls,
+  marqueeRect,
+  onMarqueeStart,
+  onMarqueeMove,
+  onMarqueeEnd,
 }: CanvasStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -83,9 +91,23 @@ export function CanvasStage({
     ctx.translate(offset.x, offset.y);
     ctx.scale(scale, scale);
     draw(ctx);
+    if (marqueeRect) {
+      const x = Math.min(marqueeRect.x0, marqueeRect.x1);
+      const y = Math.min(marqueeRect.y0, marqueeRect.y1);
+      const w = Math.abs(marqueeRect.x1 - marqueeRect.x0);
+      const h = Math.abs(marqueeRect.y1 - marqueeRect.y0);
+      ctx.save();
+      ctx.fillStyle = "rgba(34, 211, 238, 0.08)";
+      ctx.strokeStyle = "#22d3ee";
+      ctx.lineWidth = 1 / Math.max(0.05, scale);
+      ctx.setLineDash([4 / Math.max(0.05, scale), 4 / Math.max(0.05, scale)]);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
     ctx.restore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draw, scale, offset, containerSize, repaintKey, width, height]);
+  }, [draw, scale, offset, containerSize, repaintKey, width, height, marqueeRect]);
 
   const toImageCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current!;
@@ -113,6 +135,9 @@ export function CanvasStage({
     downRef.current = { x: e.clientX, y: e.clientY, moved: false };
     if (mode === "pan" || e.button === 1 || e.shiftKey) {
       panRef.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
+    } else if (mode === "marquee") {
+      const { x, y } = toImageCoords(e.clientX, e.clientY);
+      onMarqueeStart?.(x, y);
     }
   };
 
@@ -127,6 +152,9 @@ export function CanvasStage({
         x: panRef.current.ox + (e.clientX - panRef.current.x),
         y: panRef.current.oy + (e.clientY - panRef.current.y),
       });
+    } else if (mode === "marquee" && downRef.current?.moved) {
+      const { x, y } = toImageCoords(e.clientX, e.clientY);
+      onMarqueeMove?.(x, y);
     } else {
       if (onImageMove) {
         const { x, y } = toImageCoords(e.clientX, e.clientY);
@@ -140,6 +168,10 @@ export function CanvasStage({
     if (downRef.current && !downRef.current.moved && onImageClick) {
       const { x, y } = toImageCoords(e.clientX, e.clientY);
       onImageClick(x, y, e);
+    } else if (mode === "marquee" && downRef.current?.moved) {
+      const start = toImageCoords(downRef.current.x, downRef.current.y);
+      const { x, y } = toImageCoords(e.clientX, e.clientY);
+      onMarqueeEnd?.({ x0: start.x, y0: start.y, x1: x, y1: y });
     }
     downRef.current = null;
   };

@@ -1,5 +1,6 @@
 import { type Gray, clamp, gaussianBlur } from "./image";
 import type { Detection } from "@/types";
+import { auditEvent } from "@/lib/analysis";
 
 export type Polarity = "bright" | "dark";
 
@@ -534,6 +535,7 @@ export function computeProperties(
       angle,
       manual: false,
       status: "auto",
+      history: [auditEvent("auto-detect")],
     });
   }
   return out;

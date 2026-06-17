@@ -18,6 +18,9 @@ import {
   CheckCircle2,
   X,
   Eye,
+  History,
+  Clock,
+  Crop,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { CanvasStage } from "@/components/ui/CanvasStage";
@@ -37,6 +40,7 @@ import {
   aspectRatioOf,
   summaryStats,
   fmt,
+  AUDIT_LABEL,
 } from "@/lib/analysis";
 import type { Detection, DetectionStatus, Experiment } from "@/types";
 import { cn } from "@/lib/utils";
@@ -92,7 +96,8 @@ export default function Count() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [label, setLabel] = useState("");
-  const [tool, setTool] = useState<"pan" | "add" | "delete" | "review">("pan");
+  const [tool, setTool] = useState<"pan" | "add" | "delete" | "review" | "select">("pan");
+  const [marqueeRect, setMarqueeRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [showExcluded, setShowExcluded] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -149,7 +154,7 @@ export default function Count() {
       });
       setProgress(0.9);
       setLabel("合并标记");
-      const existingManual = detections.filter((d) => d.manual || d.status === "pending");
+      const existingManual = detections.filter((d) => d.status === "manual" || d.status === "pending");
       let nextId = auto.reduce((m, d) => Math.max(m, d.id), -1) + 1;
       const manual: Detection[] = existingManual.map((d) => ({ ...d, id: nextId++ }));
       setDetections(expId, [...auto, ...manual]);
@@ -158,6 +163,70 @@ export default function Count() {
       await new Promise((r) => setTimeout(r, 250));
     } catch (e) {
       setLabel(`失败：${e instanceof Error ? e.message : String(e)}`);
+      await new Promise((r) => setTimeout(r, 1500));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const runLocalDetect = async (rect: { x0: number; y0: number; x1: number; y1: number }) => {
+    if (!panorama || !panoImg) return;
+    const x0 = Math.floor(rect.x0);
+    const y0 = Math.floor(rect.y0);
+    const w = Math.ceil(rect.x1 - x0);
+    const h = Math.ceil(rect.y1 - y0);
+    if (w < 4 || h < 4) {
+      setMarqueeRect(null);
+      return;
+    }
+    setRunning(true);
+    setProgress(0.2);
+    setLabel("截取局部区域");
+    try {
+      await new Promise((r) => setTimeout(r, 30));
+      const off = document.createElement("canvas");
+      off.width = w;
+      off.height = h;
+      const octx = off.getContext("2d")!;
+      octx.drawImage(panoImg, x0, y0, w, h, 0, 0, w, h);
+      const img = octx.getImageData(0, 0, w, h);
+      const data = new Float32Array(w * h);
+      for (let i = 0, j = 0; i < img.data.length; i += 4, j++) {
+        const r = img.data[i], g = img.data[i + 1], b = img.data[i + 2];
+        data[j] = 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+      const gray = { data, w, h } as Awaited<ReturnType<typeof dataUrlToGray>>;
+      setProgress(0.5);
+      setLabel("局部分割与分水岭");
+      await new Promise((r) => setTimeout(r, 20));
+      const { detections: localAuto } = segment(gray, {
+        polarity,
+        sensitivity,
+        minArea,
+        watershed: useWatershed,
+      });
+      setProgress(0.85);
+      setLabel("合并标记（保留区域外自动目标与所有复核标记）");
+      let nextId = Math.max(-1, ...detections.map((d) => d.id)) + 1;
+      const shifted: Detection[] = localAuto.map((d) => ({
+        ...d,
+        id: nextId++,
+        cx: d.cx + x0,
+        cy: d.cy + y0,
+      }));
+      const insideBox = (cx: number, cy: number) => cx >= x0 && cx <= x0 + w && cy >= y0 && cy <= y0 + h;
+      const preserved = detections.filter((d) => {
+        if (d.status === "manual" || d.status === "pending") return true;
+        return !insideBox(d.cx, d.cy);
+      });
+      const merged = [...preserved, ...shifted];
+      setDetections(expId, merged);
+      setProgress(1);
+      setLabel(`局部重检完成：选区内替换 ${shifted.length} 个自动目标，保留 ${preserved.length} 个（区域外自动 + 所有复核）`);
+      setMarqueeRect(null);
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      setLabel(`局部重检失败：${e instanceof Error ? e.message : String(e)}`);
       await new Promise((r) => setTimeout(r, 1500));
     } finally {
       setRunning(false);
@@ -411,11 +480,15 @@ export default function Count() {
                 options={[
                   { value: "pan", label: <Hand size={13} />, title: "平移" },
                   { value: "review", label: <Eye size={13} />, title: "复核（点击目标查详情）" },
+                  { value: "select", label: <Crop size={13} />, title: "框选局部重检" },
                   { value: "add", label: <Plus size={13} />, title: "添加标记" },
                   { value: "delete", label: <Eraser size={13} />, title: "删除标记" },
                 ]}
                 value={tool}
-                onChange={(v) => setTool(v as typeof tool)}
+                onChange={(v) => {
+                  setTool(v as typeof tool);
+                  setMarqueeRect(null);
+                }}
               />
               <div className="mt-1 rounded-[3px] border border-ink-700/60 bg-ink-900/40 px-3 py-2">
                 <Toggle checked={showExcluded} onChange={setShowExcluded} label="显示过滤外目标" hint="灰色弱化显示" />
@@ -427,7 +500,9 @@ export default function Count() {
                     ? "点击目标删除"
                     : tool === "review"
                       ? "点击目标查看详情并切换状态"
-                      : "拖拽平移视图，可点击目标查看详情"}
+                      : tool === "select"
+                        ? "在全景图上拖拽矩形框选区域，松开后仅重检该区域内自动目标"
+                        : "拖拽平移视图，可点击目标查看详情"}
               </p>
             </Section>
 
@@ -476,14 +551,30 @@ export default function Count() {
               width={panorama.width}
               height={panorama.height}
               draw={draw}
-              repaintKey={`${detections.length}-${hoveredId}-${selectedId ?? -1}-${statusFilter}-${panoImg ? 1 : 0}`}
-              mode={tool === "pan" ? "pan" : "crosshair"}
+              repaintKey={`${detections.length}-${hoveredId}-${selectedId ?? -1}-${statusFilter}-${panoImg ? 1 : 0}-${marqueeRect ? `${marqueeRect.x0}-${marqueeRect.y0}-${marqueeRect.x1}-${marqueeRect.y1}` : "0"}`}
+              mode={tool === "pan" ? "pan" : tool === "select" ? "marquee" : "crosshair"}
               onImageClick={onImageClick}
               onImageMove={onImageMove}
+              marqueeRect={tool === "select" ? marqueeRect : null}
+              onMarqueeStart={(x, y) => setMarqueeRect({ x0: x, y0: y, x1: x, y1: y })}
+              onMarqueeMove={(x, y) => setMarqueeRect((prev) => (prev ? { ...prev, x1: x, y1: y } : null))}
+              onMarqueeEnd={(rect) => {
+                if (!panorama) return;
+                const x0 = Math.max(0, Math.min(rect.x0, rect.x1));
+                const x1 = Math.min(panorama.width, Math.max(rect.x0, rect.x1));
+                const y0 = Math.max(0, Math.min(rect.y0, rect.y1));
+                const y1 = Math.min(panorama.height, Math.max(rect.y0, rect.y1));
+                if (x1 - x0 < 8 || y1 - y0 < 8) {
+                  setMarqueeRect(null);
+                  return;
+                }
+                runLocalDetect({ x0, y0, x1, y1 });
+              }}
               cursor={
                 tool === "add" ? "crosshair" :
                 tool === "delete" ? "not-allowed" :
                 tool === "review" ? "pointer" :
+                tool === "select" ? "crosshair" :
                 hoveredId != null ? "pointer" : undefined
               }
               controls={
@@ -636,6 +727,38 @@ function DetectionDetailBody({ detection }: { detection: Detection }) {
             </div>
           ))}
         </div>
+      </div>
+      <div className="rounded-[4px] border border-ink-600/60 bg-ink-900/40 p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <History size={13} className="text-ink-400" />
+          <span className="text-xs font-medium text-ink-200">处理轨迹</span>
+        </div>
+        <ol className="relative ml-2 border-l border-ink-600/70">
+          {(detection.history ?? []).slice().reverse().map((ev, idx) => {
+            const t = new Date(ev.at);
+            const hhmmss = t.toLocaleTimeString();
+            const mmdd = t.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+            return (
+              <li key={idx} className="relative ml-4 pb-3 last:pb-0">
+                <span className="absolute -left-[22px] top-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-800 bg-ink-400" />
+                <div className="flex items-center gap-2 text-2xs">
+                  <span className="font-medium text-ink-100">{AUDIT_LABEL[ev.action] ?? ev.action}</span>
+                  {ev.fromStatus && (
+                    <span className="mono text-ink-500">← {STATUS_LABEL_LONG[ev.fromStatus]}</span>
+                  )}
+                </div>
+                <div className="mono mt-0.5 flex items-center gap-1 text-2xs text-ink-500">
+                  <Clock size={10} />
+                  {mmdd} {hhmmss}
+                  {ev.note && <span>· {ev.note}</span>}
+                </div>
+              </li>
+            );
+          })}
+          {(!detection.history || detection.history.length === 0) && (
+            <li className="ml-4 pb-0 text-2xs text-ink-500">暂无记录</li>
+          )}
+        </ol>
       </div>
       <div className="rounded-[4px] border border-ink-600/40 bg-ink-850/40 px-3 py-2 text-2xs text-ink-300">
         提示：点击下方「标为待确认 / 转为人工 / 转回自动」可快速切换该目标的分类状态；

@@ -4,6 +4,22 @@ export type WorkflowStage = "stitch" | "count" | "measure" | "compare";
 
 export type DetectionStatus = "auto" | "manual" | "pending";
 
+export type AuditAction =
+  | "auto-detect"
+  | "manual-add"
+  | "mark-pending"
+  | "mark-manual"
+  | "revert-auto"
+  | "delete"
+  | "import";
+
+export interface AuditEvent {
+  action: AuditAction;
+  at: number;
+  fromStatus?: DetectionStatus;
+  note?: string;
+}
+
 export interface Experiment {
   id: string;
   name: string;
@@ -58,6 +74,8 @@ export interface Detection {
    * @pending 复核时标记为待确认
    */
   status: DetectionStatus;
+  /** 处理轨迹，时间升序 */
+  history: AuditEvent[];
 }
 
 export interface MorphFilter {

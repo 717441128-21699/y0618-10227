@@ -1,5 +1,33 @@
-import type { Detection, MorphFilter, Stats } from "@/types";
+import type { Detection, MorphFilter, Stats, AuditEvent, AuditAction, DetectionStatus } from "@/types";
 import { computeStats } from "./image";
+
+export const AUDIT_LABEL: Record<AuditAction, string> = {
+  "auto-detect": "自动检出",
+  "manual-add": "人工添加",
+  "mark-pending": "标为待确认",
+  "mark-manual": "复核通过/转人工",
+  "revert-auto": "退回自动",
+  "delete": "删除",
+  "import": "项目包导入",
+};
+
+export function auditEvent(action: AuditAction, fromStatus?: DetectionStatus, note?: string): AuditEvent {
+  return { action, at: Date.now(), fromStatus, note };
+}
+
+export function ensureHistory(d: Detection): Detection {
+  if (Array.isArray(d.history)) return d;
+  const inferred: AuditAction = d.manual ? "manual-add" : "auto-detect";
+  return { ...d, history: [auditEvent(inferred)] };
+}
+
+export function appendAudit(d: Detection, action: AuditAction, note?: string): Detection {
+  const base = ensureHistory(d);
+  return {
+    ...base,
+    history: [...base.history, auditEvent(action, base.status, note)],
+  };
+}
 
 export function defaultFilter(): MorphFilter {
   return {
