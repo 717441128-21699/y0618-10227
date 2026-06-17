@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: #0a0e14;
+    --panel: #12161f;
+    --line: #222b3c;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    line-height: 1.5;
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    color: #e6edf6;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: rgba(45, 212, 191, 0.3);
+    color: #e6edf6;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3344 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: #2a3344;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #3a4459;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-ink-600/80 bg-ink-800/80 shadow-panel;
+  }
+
+  .panel-raised {
+    @apply rounded-lg border border-ink-600/80 bg-ink-750 shadow-panel;
+  }
+
+  .hairline {
+    @apply border border-ink-600/70;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-[3px] border border-ink-600/80
+      bg-ink-700/60 px-3 py-1.5 text-xs font-medium text-ink-100 transition
+      hover:border-fluor/60 hover:bg-ink-650 hover:text-fluor-glow
+      active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40
+      disabled:hover:border-ink-600/80 disabled:hover:bg-ink-700/60 disabled:hover:text-ink-100;
+  }
+
+  .btn-primary {
+    @apply border-fluor/70 bg-fluor/15 text-fluor-glow hover:bg-fluor/25 hover:shadow-glow;
+  }
+
+  .btn-amber {
+    @apply border-amber/60 bg-amber/15 text-amber-glow hover:bg-amber/25;
+  }
+
+  .btn-danger {
+    @apply border-coral/50 bg-coral/10 text-coral-glow hover:bg-coral/20;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-200 hover:bg-ink-700/50 hover:text-ink-50;
+  }
+
+  .icon-btn {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-ink-600/70
+      bg-ink-700/40 text-ink-200 transition hover:border-fluor/50 hover:text-fluor-glow
+      active:translate-y-px disabled:opacity-40;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-ink-600/70 bg-ink-700/40
+      px-2 py-0.5 text-2xs font-medium uppercase tracking-wider text-ink-200;
+  }
+
+  .field-label {
+    @apply text-2xs font-semibold uppercase tracking-[0.14em] text-ink-300;
+  }
+
+  .mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .crosshair-canvas {
+    cursor: crosshair;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .bg-grid {
+    background-image: theme("backgroundImage.grid-faint");
+    background-size: 32px 32px;
+  }
+}
