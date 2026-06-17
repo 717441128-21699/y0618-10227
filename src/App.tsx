@@ -5,6 +5,7 @@ import Stitch from "@/pages/Stitch";
 import Count from "@/pages/Count";
 import Measure from "@/pages/Measure";
 import Compare from "@/pages/Compare";
+import Batch from "@/pages/Batch";
 import { GlobalDialogProvider, useGlobalDialog } from "@/lib/globalDialog";
 import { CreateExperimentModal } from "@/components/CreateExperimentModal";
 import { ImportProjectModal } from "@/components/ImportProjectModal";
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="/count/:expId" element={<Count />} />
             <Route path="/measure/:expId" element={<Measure />} />
             <Route path="/compare" element={<Compare />} />
+            <Route path="/batch" element={<Batch />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

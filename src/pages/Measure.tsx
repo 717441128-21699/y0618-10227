@@ -9,9 +9,12 @@ import {
   BarChart3,
   Sigma,
   FileSpreadsheet,
+  Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Toggle } from "@/components/ui/Toggle";
+import { Segmented } from "@/components/ui/Segmented";
 import { useStore } from "@/store/useStore";
 import { computeStats } from "@/lib/image";
 import {
@@ -22,11 +25,40 @@ import {
   aspectRatioOf,
   fmt,
 } from "@/lib/analysis";
-import type { Stats } from "@/types";
+import type { Stats, DetectionStatus } from "@/types";
 import { downloadCsv, sanitizeName } from "@/lib/export";
 import { cn } from "@/lib/utils";
 
-type SortKey = "id" | "area" | "perimeter" | "majorAxis" | "minorAxis" | "circularity" | "angle";
+type SortKey =
+  | "id"
+  | "status"
+  | "area"
+  | "perimeter"
+  | "majorAxis"
+  | "minorAxis"
+  | "circularity"
+  | "angle";
+
+type StatusFilter = "all" | DetectionStatus;
+
+const STATUS_LABEL: Record<StatusFilter, string> = {
+  all: "全部",
+  auto: "自动",
+  manual: "人工",
+  pending: "待确认",
+};
+
+const STATUS_BADGE: Record<DetectionStatus, { label: string; cls: string }> = {
+  auto: { label: "自动", cls: "bg-fluor/10 text-fluor-glow" },
+  manual: { label: "人工", cls: "bg-amber/15 text-amber-glow" },
+  pending: { label: "待确认", cls: "bg-red/15 text-red" },
+};
+
+const STATUS_WEIGHT: Record<DetectionStatus, number> = {
+  pending: 0,
+  auto: 1,
+  manual: 2,
+};
 
 export default function Measure() {
   const { expId = "" } = useParams();
@@ -37,17 +69,35 @@ export default function Measure() {
   const updateExperimentStage = useStore((s) => s.updateExperimentStage);
 
   const [usePhysical, setUsePhysical] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("area");
-  const [sortDir, setSortDir] = useState<1 | -1>(-1);
+  const [sortKey, setSortKey] = useState<SortKey>("status");
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const scale = exp?.scale ?? 1;
-  const filtered = useMemo(() => filterDetections(detections, filter), [detections, filter]);
+  const allFiltered = useMemo(() => filterDetections(detections, filter), [detections, filter]);
+  const filtered = useMemo(
+    () => (statusFilter === "all" ? allFiltered : allFiltered.filter((d) => d.status === statusFilter)),
+    [allFiltered, statusFilter]
+  );
+
+  const counts = useMemo(
+    () => ({
+      all: allFiltered.length,
+      auto: allFiltered.filter((d) => d.status === "auto").length,
+      manual: allFiltered.filter((d) => d.status === "manual").length,
+      pending: allFiltered.filter((d) => d.status === "pending").length,
+    }),
+    [allFiltered]
+  );
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
     arr.sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      if (sortKey === "status") {
+        return (STATUS_WEIGHT[a.status] - STATUS_WEIGHT[b.status]) * sortDir;
+      }
+      const av = a[sortKey] as number;
+      const bv = b[sortKey] as number;
       return (av - bv) * sortDir;
     });
     return arr;
@@ -66,18 +116,39 @@ export default function Measure() {
     if (k === sortKey) setSortDir((d) => (d === 1 ? -1 : 1));
     else {
       setSortKey(k);
-      setSortDir(-1);
+      setSortDir(k === "status" ? 1 : -1);
     }
   };
+
+  const L = (px: number) => (usePhysical ? px * scale : px);
+  const A = (px2: number) => (usePhysical ? px2 * scale * scale : px2);
+  const uL = usePhysical ? "µm" : "px";
+  const uA = usePhysical ? "µm²" : "px²";
 
   const exportCSV = () => {
     const rows = [
       ["实验组", exp?.name ?? ""],
       ["标尺(µm/px)", scale, "单位", usePhysical ? "物理" : "像素"],
+      [
+        "统计摘要",
+        `计数 ${counts.all}（自动 ${counts.auto} · 人工 ${counts.manual} · 待确认 ${counts.pending}）`,
+      ],
       [],
-      ["#", `面积(${uA})`, `周长(${uL})`, `长轴(${uL})`, `短轴(${uL})`, "长短轴比", "圆度", "角度(°)", "来源"],
+      [
+        "#",
+        "状态",
+        `面积(${uA})`,
+        `周长(${uL})`,
+        `长轴(${uL})`,
+        `短轴(${uL})`,
+        "长短轴比",
+        "圆度",
+        "角度(°)",
+        "来源",
+      ],
       ...sorted.map((d, i) => [
         i + 1,
+        STATUS_BADGE[d.status].label,
         A(d.area).toFixed(uA === "px²" ? 0 : 2),
         L(d.perimeter).toFixed(uL === "px" ? 1 : 2),
         L(d.majorAxis).toFixed(uL === "px" ? 2 : 3),
@@ -90,11 +161,6 @@ export default function Measure() {
     ];
     downloadCsv(rows, `${sanitizeName(exp?.name ?? "experiment")}_measurements.csv`);
   };
-
-  const L = (px: number) => (usePhysical ? px * scale : px);
-  const A = (px2: number) => (usePhysical ? px2 * scale * scale : px2);
-  const uL = usePhysical ? "µm" : "px";
-  const uA = usePhysical ? "µm²" : "px²";
 
   if (!exp) {
     return (
@@ -148,36 +214,61 @@ export default function Measure() {
             </div>
           ) : (
             <>
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <Sigma size={16} className="text-fluor" />
                   <span className="text-sm font-semibold text-ink-50">形态统计</span>
                   <span className="mono rounded bg-ink-700/50 px-1.5 py-0.5 text-2xs text-ink-200">
-                    {filtered.length} 个目标
+                    显示 {filtered.length}/{allFiltered.length}
                   </span>
+                  {counts.pending > 0 && (
+                    <span className="mono inline-flex items-center gap-1 rounded bg-red/10 px-1.5 py-0.5 text-2xs text-red">
+                      <AlertTriangle size={10} />
+                      {counts.pending} 待确认
+                    </span>
+                  )}
                 </div>
-                <div className="w-56">
-                  <Toggle
-                    checked={usePhysical}
-                    onChange={setUsePhysical}
-                    label="物理单位"
-                    hint={`标尺 ${scale} µm/px → ${usePhysical ? "µm / µm²" : "px / px²"}`}
-                    accent="amber"
-                  />
+                <div className="flex items-center gap-2">
+                  <div className="w-48">
+                    <Segmented<StatusFilter>
+                      options={[
+                        { value: "all", label: `全部 ${counts.all}` },
+                        { value: "auto", label: `${counts.auto}` },
+                        { value: "manual", label: `${counts.manual}` },
+                        { value: "pending", label: `?${counts.pending}` },
+                      ]}
+                      value={statusFilter}
+                      onChange={setStatusFilter}
+                    />
+                  </div>
+                  <div className="w-56">
+                    <Toggle
+                      checked={usePhysical}
+                      onChange={setUsePhysical}
+                      label="物理单位"
+                      hint={`标尺 ${scale} µm/px`}
+                      accent="amber"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+              <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
                 <SummaryCard label="计数" value={fmt(filtered.length, 0)} unit="个" accent />
+                <SummaryCard label="自动" value={fmt(counts.auto, 0)} />
+                <SummaryCard label="人工" value={fmt(counts.manual, 0)} />
+                <SummaryCard
+                  label="待确认"
+                  value={fmt(counts.pending, 0)}
+                  accent={counts.pending > 0}
+                />
                 <SummaryCard label="均值面积" value={fmt(A(areaStats.mean))} unit={uA} />
-                <SummaryCard label="均值周长" value={fmt(L(perimStats.mean))} unit={uL} />
                 <SummaryCard label="中位圆度" value={fmt(circStats.median, 2)} />
-                <SummaryCard label="均值长轴" value={fmt(L(summaryStats(filtered, "majorAxis").mean))} unit={uL} />
               </div>
 
               <div className="mb-3 flex items-center gap-2">
                 <BarChart3 size={14} className="text-fluor" />
-                <span className="field-label">参数分布</span>
+                <span className="field-label">参数分布（当前筛选）</span>
               </div>
               <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <HistogramCard
@@ -216,6 +307,10 @@ export default function Measure() {
                 <div className="flex items-center gap-2">
                   <Table2 size={14} className="text-fluor" />
                   <span className="field-label">测量明细</span>
+                  <Eye size={12} className="text-ink-400" />
+                  <span className="mono text-2xs text-ink-400">
+                    {statusFilter === "all" ? "全部状态" : `仅 ${STATUS_LABEL[statusFilter]}`}
+                  </span>
                 </div>
                 <span className="mono text-2xs text-ink-400">点击表头排序</span>
               </div>
@@ -225,6 +320,7 @@ export default function Measure() {
                     <thead className="sticky top-0 z-10 bg-ink-850/95 backdrop-blur">
                       <tr className="mono text-2xs uppercase tracking-wider text-ink-300">
                         <Th label="#" k="id" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                        <Th label="状态" k="status" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                         <Th label={`面积 (${uA})`} k="area" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
                         <Th label={`周长 (${uL})`} k="perimeter" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
                         <Th label={`长轴 (${uL})`} k="majorAxis" sortKey={sortKey} dir={sortDir} onSort={toggleSort} right />
@@ -241,10 +337,22 @@ export default function Measure() {
                           key={d.id}
                           className={cn(
                             "border-t border-ink-700/40 transition hover:bg-fluor/5",
-                            i % 2 === 1 && "bg-ink-900/20"
+                            i % 2 === 1 && "bg-ink-900/20",
+                            d.status === "pending" && "!bg-red/5"
                           )}
                         >
                           <td className="mono px-3 py-1.5 text-ink-400">{i + 1}</td>
+                          <td className="px-3 py-1.5">
+                            <span
+                              className={cn(
+                                "mono inline-flex items-center rounded px-1.5 py-0.5 text-2xs",
+                                STATUS_BADGE[d.status].cls
+                              )}
+                            >
+                              {d.status === "pending" && <AlertTriangle size={9} className="mr-0.5" />}
+                              {STATUS_BADGE[d.status].label}
+                            </span>
+                          </td>
                           <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(A(d.area), 0)}</td>
                           <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.perimeter))}</td>
                           <td className="mono px-3 py-1.5 text-right tabular text-ink-100">{fmt(L(d.majorAxis))}</td>
@@ -253,14 +361,7 @@ export default function Measure() {
                           <td className="mono px-3 py-1.5 text-right tabular text-fluor-glow">{fmt(d.circularity, 3)}</td>
                           <td className="mono px-3 py-1.5 text-right tabular text-ink-300">{fmt((d.angle * 180) / Math.PI)}</td>
                           <td className="px-3 py-1.5 text-right">
-                            <span
-                              className={cn(
-                                "mono rounded px-1.5 py-0.5 text-2xs",
-                                d.manual
-                                  ? "bg-amber/15 text-amber-glow"
-                                  : "bg-fluor/10 text-fluor-glow"
-                              )}
-                            >
+                            <span className="mono rounded bg-ink-700/30 px-1.5 py-0.5 text-2xs text-ink-200">
                               {d.manual ? "手动" : "自动"}
                             </span>
                           </td>
@@ -274,7 +375,7 @@ export default function Measure() {
               <div className="mt-4 flex items-center gap-2 rounded-[4px] border border-ink-700/60 bg-ink-900/30 px-4 py-3">
                 <Download size={14} className="text-ink-300" />
                 <span className="text-2xs text-ink-300">
-                  导出 CSV 包含全部 {filtered.length} 个目标的形态参数；带标注图像可在「对比与导出」页面生成。
+                  导出 CSV 包含当前筛选的 {filtered.length} 个目标的形态参数，状态列单独列出待确认；带标注图像可在「对比与导出」页面生成。
                 </span>
               </div>
             </>

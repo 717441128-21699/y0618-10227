@@ -533,6 +533,7 @@ export function computeProperties(
       circularity,
       angle,
       manual: false,
+      status: "auto",
     });
   }
   return out;

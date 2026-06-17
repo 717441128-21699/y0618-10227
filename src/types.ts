@@ -2,6 +2,8 @@ export type TargetType = "cell" | "particle" | "colony";
 
 export type WorkflowStage = "stitch" | "count" | "measure" | "compare";
 
+export type DetectionStatus = "auto" | "manual" | "pending";
+
 export interface Experiment {
   id: string;
   name: string;
@@ -50,6 +52,12 @@ export interface Detection {
   circularity: number;
   angle: number;
   manual: boolean;
+  /**
+   * @default auto 正常自动检测
+   * @manual 人工新增/复核后的手动新增
+   * @pending 复核时标记为待确认
+   */
+  status: DetectionStatus;
 }
 
 export interface MorphFilter {

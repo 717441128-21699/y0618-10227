@@ -14,6 +14,10 @@ import {
   Filter,
   Hash,
   Crosshair,
+  AlertTriangle,
+  CheckCircle2,
+  X,
+  Eye,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { CanvasStage } from "@/components/ui/CanvasStage";
@@ -22,6 +26,7 @@ import { RangeSlider } from "@/components/ui/RangeSlider";
 import { Segmented } from "@/components/ui/Segmented";
 import { Toggle } from "@/components/ui/Toggle";
 import { ProcessingOverlay } from "@/components/ui/Spinner";
+import { Modal } from "@/components/ui/Modal";
 import { useStore } from "@/store/useStore";
 import { dataUrlToGray } from "@/lib/image";
 import { segment, type Polarity } from "@/lib/segmentation";
@@ -33,10 +38,37 @@ import {
   summaryStats,
   fmt,
 } from "@/lib/analysis";
-import type { Detection } from "@/types";
+import type { Detection, DetectionStatus, Experiment } from "@/types";
 import { cn } from "@/lib/utils";
 
 const MANUAL_R = 7;
+
+type StatusFilter = "all" | DetectionStatus;
+
+const STATUS_LABEL: Record<StatusFilter, string> = {
+  all: "全部",
+  auto: "自动",
+  manual: "人工",
+  pending: "待确认",
+};
+
+const STATUS_COLOR: Record<DetectionStatus, string> = {
+  auto: "#2dd4bf",
+  manual: "#fbbf24",
+  pending: "#f87171",
+};
+
+const STATUS_FILL: Record<DetectionStatus, string> = {
+  auto: "rgba(45,212,191,0.06)",
+  manual: "rgba(251,191,36,0.12)",
+  pending: "rgba(248,113,113,0.14)",
+};
+
+const STATUS_LABEL_LONG: Record<DetectionStatus, string> = {
+  auto: "自动检测",
+  manual: "人工标注",
+  pending: "待确认",
+};
 
 export default function Count() {
   const { expId = "" } = useParams();
@@ -48,6 +80,7 @@ export default function Count() {
   const setDetections = useStore((s) => s.setDetections);
   const addManualDetection = useStore((s) => s.addManualDetection);
   const removeDetection = useStore((s) => s.removeDetection);
+  const updateDetectionStatus = useStore((s) => s.updateDetectionStatus);
   const clearDetections = useStore((s) => s.clearDetections);
   const setFilter = useStore((s) => s.setFilter);
   const updateExperimentStage = useStore((s) => s.updateExperimentStage);
@@ -59,9 +92,11 @@ export default function Count() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [label, setLabel] = useState("");
-  const [tool, setTool] = useState<"pan" | "add" | "delete">("pan");
+  const [tool, setTool] = useState<"pan" | "add" | "delete" | "review">("pan");
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [showExcluded, setShowExcluded] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [panoImg, setPanoImg] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -75,7 +110,19 @@ export default function Count() {
   }, [panorama?.dataUrl, panorama]);
 
   const filtered = useMemo(() => filterDetections(detections, filter), [detections, filter]);
-  const manualDets = useMemo(() => detections.filter((d) => d.manual), [detections]);
+  const displayed = useMemo(() => {
+    const list = statusFilter === "all" ? filtered : filtered.filter((d) => d.status === statusFilter);
+    return list;
+  }, [filtered, statusFilter]);
+
+  const counts = useMemo(() => {
+    return {
+      all: filtered.length,
+      auto: filtered.filter((d) => d.status === "auto").length,
+      manual: filtered.filter((d) => d.status === "manual").length,
+      pending: filtered.filter((d) => d.status === "pending").length,
+    };
+  }, [filtered]);
 
   const maxArea = useMemo(() => {
     return Math.max(50, ...detections.map((d) => d.area));
@@ -102,12 +149,12 @@ export default function Count() {
       });
       setProgress(0.9);
       setLabel("合并标记");
-      const existingManual = detections.filter((d) => d.manual);
+      const existingManual = detections.filter((d) => d.manual || d.status === "pending");
       let nextId = auto.reduce((m, d) => Math.max(m, d.id), -1) + 1;
       const manual: Detection[] = existingManual.map((d) => ({ ...d, id: nextId++ }));
       setDetections(expId, [...auto, ...manual]);
       setProgress(1);
-      setLabel(`检出 ${auto.length} 个目标`);
+      setLabel(`检出 ${auto.length} 个目标（保留 ${manual.length} 个复核/人工）`);
       await new Promise((r) => setTimeout(r, 250));
     } catch (e) {
       setLabel(`失败：${e instanceof Error ? e.message : String(e)}`);
@@ -120,7 +167,7 @@ export default function Count() {
   const findNearest = (x: number, y: number): Detection | null => {
     let best: Detection | null = null;
     let bestD = Infinity;
-    for (const d of detections) {
+    for (const d of displayed) {
       const dx = d.cx - x;
       const dy = d.cy - y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -148,56 +195,69 @@ export default function Count() {
     } else if (tool === "delete") {
       const near = findNearest(x, y);
       if (near) removeDetection(expId, near.id);
+    } else if (tool === "review" || tool === "pan") {
+      const near = findNearest(x, y);
+      if (near) setSelectedId(near.id);
+      else setSelectedId(null);
     }
   };
 
   const onImageMove = (x: number, y: number) => {
-    if (tool !== "delete") return;
+    if (tool === "pan" || tool === "add") {
+      setHoveredId(null);
+      return;
+    }
     const near = findNearest(x, y);
     setHoveredId(near ? near.id : null);
   };
+
+  const selected = useMemo(
+    () => (selectedId != null ? detections.find((d) => d.id === selectedId) ?? null : null),
+    [selectedId, detections]
+  );
 
   const draw = useCallback(
     (ctx: CanvasRenderingContext2D) => {
       if (!panoImg || !panorama) return;
       ctx.drawImage(panoImg, 0, 0, panorama.width, panorama.height);
       for (const d of detections) {
-        const isManual = d.manual;
-        const isPass = isManual || passesFilter(d, filter);
+        const isPass = d.manual || d.status === "pending" || passesFilter(d, filter);
         if (!isPass && !showExcluded) continue;
-        const hovered = hoveredId === d.id;
+        if (statusFilter !== "all" && d.status !== statusFilter) continue;
+        const hovered = hoveredId === d.id || selectedId === d.id;
         ctx.save();
         ctx.translate(d.cx, d.cy);
         ctx.rotate(d.angle);
-        if (isManual) {
-          ctx.strokeStyle = "#fbbf24";
-          ctx.lineWidth = (hovered ? 2 : 1.4) / ctx.getTransform().a;
-          ctx.fillStyle = "rgba(251,191,36,0.12)";
-        } else if (isPass) {
-          ctx.strokeStyle = hovered ? "#5eead4" : "#2dd4bf";
-          ctx.lineWidth = (hovered ? 1.8 : 1) / ctx.getTransform().a;
-          ctx.fillStyle = "rgba(45,212,191,0.06)";
-        } else {
-          ctx.strokeStyle = "rgba(120,130,150,0.5)";
-          ctx.lineWidth = 0.7 / ctx.getTransform().a;
-          ctx.fillStyle = "transparent";
+        const color = STATUS_COLOR[d.status];
+        ctx.strokeStyle = hovered ? "#ffffff" : color;
+        ctx.lineWidth = (hovered ? 2 : d.status === "pending" ? 1.4 : 1) / ctx.getTransform().a;
+        if (d.status === "pending") {
+          ctx.setLineDash([3 / ctx.getTransform().a, 3 / ctx.getTransform().a]);
         }
+        ctx.fillStyle = isPass ? STATUS_FILL[d.status] : "transparent";
         ctx.beginPath();
         ctx.ellipse(0, 0, Math.max(1, d.majorAxis), Math.max(1, d.minorAxis), 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.restore();
-        if (isPass || isManual) {
+        if (isPass) {
           ctx.save();
-          ctx.fillStyle = isManual ? "#fbbf24" : "#2dd4bf";
+          ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(d.cx, d.cy, 1.4 / ctx.getTransform().a, 0, Math.PI * 2);
           ctx.fill();
+          if (d.status === "pending") {
+            ctx.fillStyle = "#ffffff";
+            ctx.font = `${11 / ctx.getTransform().a}px monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("?", d.cx + (d.majorAxis + 4) / ctx.getTransform().a, d.cy);
+          }
           ctx.restore();
         }
       }
     },
-    [panoImg, panorama, detections, filter, showExcluded, hoveredId]
+    [panoImg, panorama, detections, filter, showExcluded, hoveredId, statusFilter, selectedId]
   );
 
   if (!exp) {
@@ -213,11 +273,18 @@ export default function Count() {
   const circStats = summaryStats(filtered, "circularity");
   const totalArea = filtered.reduce((s, d) => s + d.area, 0);
 
+  const cycleStatus = (d: Detection) => {
+    const seq: DetectionStatus[] = ["auto", "pending", "manual"];
+    const i = seq.indexOf(d.status);
+    const next = seq[(i + 1) % seq.length];
+    updateDetectionStatus(expId, d.id, next);
+  };
+
   return (
     <>
       <PageHeader
         title={exp.name}
-        subtitle="细胞计数"
+        subtitle="细胞计数 · 复核模式"
         icon={<Target size={16} />}
         crumbs={[{ label: "实验工作台", to: "/" }, { label: "计数" }]}
         actions={
@@ -269,6 +336,33 @@ export default function Count() {
                 <Play size={14} />
                 {running ? "检测中…" : "运行自动检测"}
               </button>
+              <p className="mono text-2xs text-ink-400">
+                重新检测会保留人工标记和待确认目标
+              </p>
+            </Section>
+
+            <Section title="复核模式" icon={<Eye size={13} />}>
+              <Label>按状态筛选</Label>
+              <Segmented<StatusFilter>
+                options={[
+                  { value: "all", label: `全部 (${counts.all})` },
+                  { value: "auto", label: `自动 (${counts.auto})` },
+                  { value: "manual", label: `人工 (${counts.manual})` },
+                  { value: "pending", label: `待确认 (${counts.pending})` },
+                ]}
+                value={statusFilter}
+                onChange={setStatusFilter}
+              />
+              <div className="mt-3 flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-2xs text-ink-300">
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: STATUS_COLOR.auto }} />
+                  自动检测
+                  <span className="ml-2 inline-block h-2 w-2 rounded-full" style={{ background: STATUS_COLOR.manual }} />
+                  人工
+                  <span className="ml-2 inline-block h-2 w-2 rounded-full" style={{ background: STATUS_COLOR.pending }} />
+                  待确认
+                </div>
+              </div>
             </Section>
 
             <Section title="形态过滤" icon={<Filter size={13} />}>
@@ -316,6 +410,7 @@ export default function Count() {
               <Segmented
                 options={[
                   { value: "pan", label: <Hand size={13} />, title: "平移" },
+                  { value: "review", label: <Eye size={13} />, title: "复核（点击目标查详情）" },
                   { value: "add", label: <Plus size={13} />, title: "添加标记" },
                   { value: "delete", label: <Eraser size={13} />, title: "删除标记" },
                 ]}
@@ -326,14 +421,26 @@ export default function Count() {
                 <Toggle checked={showExcluded} onChange={setShowExcluded} label="显示过滤外目标" hint="灰色弱化显示" />
               </div>
               <p className="mono mt-2 text-2xs text-ink-400">
-                {tool === "add" ? "点击图像添加标记" : tool === "delete" ? "点击目标删除" : "拖拽平移视图"}
+                {tool === "add"
+                  ? "点击图像添加标记"
+                  : tool === "delete"
+                    ? "点击目标删除"
+                    : tool === "review"
+                      ? "点击目标查看详情并切换状态"
+                      : "拖拽平移视图，可点击目标查看详情"}
               </p>
             </Section>
 
             <Section title="结果摘要" icon={<Hash size={13} />}>
               <div className="grid grid-cols-2 gap-2">
                 <Metric label="计数" value={filtered.length} accent />
-                <Metric label="手动" value={manualDets.length} />
+                <Metric label="自动" value={counts.auto} />
+                <Metric label="人工" value={counts.manual} />
+                <Metric
+                  label="待确认"
+                  value={counts.pending}
+                  accent={counts.pending > 0}
+                />
                 <Metric label="总面积" value={fmt(totalArea, 0)} unit="px²" />
                 <Metric label="均值面积" value={fmt(areaStats.mean)} unit="px²" />
                 <Metric label="中位圆度" value={fmt(circStats.median, 2)} />
@@ -342,7 +449,10 @@ export default function Count() {
               {detections.length > 0 && (
                 <button
                   className="btn mt-2 w-full justify-center hover:!border-coral/50 hover:!text-coral-glow"
-                  onClick={() => clearDetections(expId)}
+                  onClick={() => {
+                    if (counts.pending > 0 && !confirm(`尚有 ${counts.pending} 个待确认目标，确认全部清空？`)) return;
+                    clearDetections(expId);
+                  }}
                 >
                   <Trash2 size={13} />
                   清空标记
@@ -366,15 +476,24 @@ export default function Count() {
               width={panorama.width}
               height={panorama.height}
               draw={draw}
-              repaintKey={`${detections.length}-${hoveredId}-${panoImg ? 1 : 0}`}
+              repaintKey={`${detections.length}-${hoveredId}-${selectedId ?? -1}-${statusFilter}-${panoImg ? 1 : 0}`}
               mode={tool === "pan" ? "pan" : "crosshair"}
               onImageClick={onImageClick}
               onImageMove={onImageMove}
-              cursor={tool === "add" ? "crosshair" : tool === "delete" ? "not-allowed" : undefined}
+              cursor={tool === "add" ? "crosshair" : tool === "delete" ? "not-allowed" : tool === "review" ? "pointer" : undefined}
               controls={
-                <div className="pointer-events-auto flex items-center gap-1 rounded-[4px] border border-ink-600/80 bg-ink-900/80 px-2 py-0.5 text-2xs text-ink-200 backdrop-blur">
+                <div className="pointer-events-auto flex items-center gap-2 rounded-[4px] border border-ink-600/80 bg-ink-900/80 px-2.5 py-1 text-2xs text-ink-200 backdrop-blur">
                   <MousePointer2 size={11} />
-                  {detections.length} 标记
+                  {detections.length} 标记 · 显示 {displayed.length}
+                  {counts.pending > 0 && (
+                    <>
+                      <span className="text-ink-600">·</span>
+                      <span className="flex items-center gap-1 text-red">
+                        <AlertTriangle size={11} />
+                        {counts.pending} 待确认
+                      </span>
+                    </>
+                  )}
                 </div>
               }
             />
@@ -382,7 +501,142 @@ export default function Count() {
           {running && <ProcessingOverlay show={running} progress={progress} label={label} />}
         </div>
       </div>
+
+      <DetectionDetailModal
+        exp={exp}
+        detection={selected}
+        onClose={() => setSelectedId(null)}
+        onPrev={() => {
+          if (selectedId == null) return;
+          const idx = displayed.findIndex((d) => d.id === selectedId);
+          const prev = displayed[(idx - 1 + displayed.length) % displayed.length];
+          if (prev) setSelectedId(prev.id);
+        }}
+        onNext={() => {
+          if (selectedId == null) return;
+          const idx = displayed.findIndex((d) => d.id === selectedId);
+          const next = displayed[(idx + 1) % displayed.length];
+          if (next) setSelectedId(next.id);
+        }}
+        onCycle={cycleStatus}
+        onDelete={(d) => {
+          removeDetection(expId, d.id);
+          setSelectedId(null);
+        }}
+      />
     </>
+  );
+}
+
+function DetectionDetailModal({
+  exp,
+  detection,
+  onClose,
+  onPrev,
+  onNext,
+  onCycle,
+  onDelete,
+}: {
+  exp: Experiment;
+  detection: Detection | null;
+  onClose: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onCycle: (d: Detection) => void;
+  onDelete: (d: Detection) => void;
+}) {
+  return (
+    <Modal
+      open={!!detection}
+      onClose={onClose}
+      title="目标详情 · 复核"
+      subtitle={detection ? `${exp.name} · ID ${detection.id}` : undefined}
+      size="md"
+      footer={
+        detection ? (
+          <>
+            <button className="btn btn-ghost" onClick={() => onDelete(detection)}>
+              <Trash2 size={13} />
+              删除
+            </button>
+            <div className="mr-auto flex items-center gap-1">
+              <button className="icon-btn h-7 w-7" onClick={onPrev} title="上一个">
+                <ArrowLeft size={13} />
+              </button>
+              <button className="icon-btn h-7 w-7" onClick={onNext} title="下一个">
+                <ArrowRight size={13} />
+              </button>
+            </div>
+            <button className="btn" onClick={() => onCycle(detection)}>
+              {detection.status === "auto" ? (
+                <>
+                  <AlertTriangle size={13} />
+                  标为待确认
+                </>
+              ) : detection.status === "pending" ? (
+                <>
+                  <CheckCircle2 size={13} />
+                  转为人工
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={13} />
+                  转回自动
+                </>
+              )}
+            </button>
+            <button className="btn btn-primary" onClick={onClose}>
+              完成
+            </button>
+          </>
+        ) : undefined
+      }
+    >
+      {detection && <DetectionDetailBody detection={detection} />}
+    </Modal>
+  );
+}
+
+function DetectionDetailBody({ detection }: { detection: Detection }) {
+  const ar = aspectRatioOf(detection);
+  const rows: Array<{ label: string; value: string; hint?: string }> = [
+    { label: "状态", value: STATUS_LABEL_LONG[detection.status], hint: detection.status === "pending" ? "复核后转为人工" : undefined },
+    { label: "类型", value: detection.manual ? "人工" : "自动" },
+    { label: "中心", value: `(${fmt(detection.cx, 1)}, ${fmt(detection.cy, 1)}) px`, hint: "相对全景图坐标" },
+    { label: "面积", value: `${fmt(detection.area, 1)} px²` },
+    { label: "周长", value: `${fmt(detection.perimeter, 1)} px` },
+    { label: "圆度", value: fmt(detection.circularity, 3), hint: "1 = 完美圆形，越接近 0 越不规则" },
+    { label: "长轴", value: `${fmt(detection.majorAxis, 1)} px` },
+    { label: "短轴", value: `${fmt(detection.minorAxis, 1)} px` },
+    { label: "长短轴比", value: fmt(ar, 2), hint: "1 = 对称，越大越细长" },
+    { label: "倾角", value: `${fmt((detection.angle * 180) / Math.PI, 1)}°`, hint: "-90° 到 90°" },
+  ];
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-[4px] border border-ink-600/60 bg-ink-900/40 p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: STATUS_COLOR[detection.status] }} />
+          <span className="mono text-xs font-medium text-ink-100">
+            Detection #{detection.id}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          {rows.map((r) => (
+            <div key={r.label} className="border-b border-ink-700/50 py-1.5">
+              <div className="mono flex items-center justify-between text-2xs text-ink-400">
+                <span>{r.label}</span>
+                <span className="text-ink-100 font-medium tabular">{r.value}</span>
+              </div>
+              {r.hint && <div className="mono mt-0.5 text-2xs text-ink-500">{r.hint}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="rounded-[4px] border border-ink-600/40 bg-ink-850/40 px-3 py-2 text-2xs text-ink-300">
+        提示：点击下方「标为待确认 / 转为人工 / 转回自动」可快速切换该目标的分类状态；
+        待确认目标在测量页和报告中会单独统计。
+      </div>
+    </div>
   );
 }
 

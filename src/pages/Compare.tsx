@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   GitCompareArrows,
   Download,
@@ -9,6 +9,11 @@ import {
   FileSpreadsheet,
   FileText,
   Printer,
+  ScrollText,
+  Lightbulb,
+  FileImage,
+  BarChart2,
+  Rows3,
 } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
@@ -67,6 +72,35 @@ export default function Compare() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(groups.map((g) => g.exp.id)));
   const [metric, setMetric] = useState<Metric>("count");
 
+  type ReportTemplate = "paper" | "qc" | "supplementary";
+  const [template, setTemplate] = useState<ReportTemplate>("paper");
+  const [includePanoramas, setIncludePanoramas] = useState(true);
+  const [includeDistributions, setIncludeDistributions] = useState(true);
+  const [includeTable, setIncludeTable] = useState(true);
+
+  const TEMPLATE_INFO: Record<ReportTemplate, { label: string; desc: string; icon: React.ReactNode }> = {
+    paper: { label: "论文版", desc: "侧重核心统计结论与代表性全景图", icon: <ScrollText size={12} /> },
+    qc: { label: "内部质控版", desc: "含待确认计数、复核状态与错误标注", icon: <Lightbulb size={12} /> },
+    supplementary: { label: "补充材料版", desc: "全景图全覆盖 + 全量明细 + 参数分布", icon: <FileImage size={12} /> },
+  };
+
+  useEffect(() => {
+    if (template === "paper") {
+      setIncludePanoramas(true);
+      setIncludeDistributions(true);
+      setIncludeTable(false);
+    } else if (template === "qc") {
+      setIncludePanoramas(true);
+      setIncludeDistributions(false);
+      setIncludeTable(true);
+    } else if (template === "supplementary") {
+      setIncludePanoramas(true);
+      setIncludeDistributions(true);
+      setIncludeTable(true);
+    }
+  }, [template]);
+
+
   const visible = groups.filter((g) => selected.has(g.exp.id));
 
   const chart = useMemo(() => {
@@ -120,11 +154,22 @@ export default function Compare() {
   };
 
   const openReport = async () => {
-    await renderReportHtml(visible);
+    await renderReportHtml(visible, {
+      template,
+      includePanoramas,
+      includeDistributions,
+      includeTable,
+    });
   };
 
   const printReport = async () => {
-    const win = await renderReportHtml(visible, { inWindow: true });
+    const win = await renderReportHtml(visible, {
+      inWindow: true,
+      template,
+      includePanoramas,
+      includeDistributions,
+      includeTable,
+    });
     setTimeout(() => win.focus(), 300);
   };
 
@@ -198,6 +243,74 @@ export default function Compare() {
 
           {visible.length > 0 && (
             <>
+              <div className="panel-raised mb-5 p-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <FileText size={15} className="text-fluor" />
+                  <span className="text-sm font-semibold text-ink-50">报告模板</span>
+                  <span className="text-2xs text-ink-400">
+                    切换模板会自动调整默认章节勾选，可手动微调
+                  </span>
+                </div>
+                <Segmented
+                  options={[
+                    { value: "paper", label: (
+                      <span className="flex items-center gap-1.5">
+                        <ScrollText size={12} /> 论文版
+                      </span>
+                    ) },
+                    { value: "qc", label: (
+                      <span className="flex items-center gap-1.5">
+                        <Lightbulb size={12} /> 内部质控版
+                      </span>
+                    ) },
+                    { value: "supplementary", label: (
+                      <span className="flex items-center gap-1.5">
+                        <FileImage size={12} /> 补充材料版
+                      </span>
+                    ) },
+                  ]}
+                  value={template}
+                  onChange={(v) => setTemplate(v as ReportTemplate)}
+                />
+                <div className="mt-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2 text-2xs text-ink-300">
+                  {TEMPLATE_INFO[template].desc}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setIncludePanoramas(v => !v)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-2xs transition",
+                      includePanoramas
+                        ? "border-fluor/50 bg-fluor/10 text-fluor-glow"
+                        : "border-ink-600/70 bg-ink-800/50 text-ink-400 hover:border-ink-500"
+                    )}
+                  >
+                    <FileImage size={12} /> 全景图
+                  </button>
+                  <button
+                    onClick={() => setIncludeDistributions(v => !v)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-2xs transition",
+                      includeDistributions
+                        ? "border-fluor/50 bg-fluor/10 text-fluor-glow"
+                        : "border-ink-600/70 bg-ink-800/50 text-ink-400 hover:border-ink-500"
+                    )}
+                  >
+                    <BarChart2 size={12} /> 参数分布
+                  </button>
+                  <button
+                    onClick={() => setIncludeTable(v => !v)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-2xs transition",
+                      includeTable
+                        ? "border-fluor/50 bg-fluor/10 text-fluor-glow"
+                        : "border-ink-600/70 bg-ink-800/50 text-ink-400 hover:border-ink-500"
+                    )}
+                  >
+                    <Rows3 size={12} /> 明细表
+                  </button>
+                </div>
+              </div>
               <div className="panel-raised mb-5 p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -441,16 +554,33 @@ async function renderAnnotatedCanvas(input: AnnotatedInput): Promise<HTMLCanvasE
   const lw = Math.max(1, panorama.width / 500);
   ctx.lineWidth = lw;
   for (const d of detections) {
-    const pass = d.manual || (filterDetections([d], filter).length > 0);
+    const pass = d.status === "manual" || d.status === "pending" || (filterDetections([d], filter).length > 0);
     if (!pass) continue;
     ctx.save();
     ctx.translate(d.cx, d.cy);
     ctx.rotate(d.angle);
-    ctx.strokeStyle = d.manual ? "#fbbf24" : "#2dd4bf";
-    ctx.lineWidth = lw * 1.1;
+    if (d.status === "pending") {
+      ctx.strokeStyle = "#ef4444";
+      ctx.setLineDash([Math.max(3, panorama.width / 160), Math.max(2, panorama.width / 200)]);
+    } else if (d.status === "manual") {
+      ctx.strokeStyle = "#fbbf24";
+    } else {
+      ctx.strokeStyle = "#2dd4bf";
+    }
+    ctx.lineWidth = lw * (d.status === "pending" ? 1.3 : 1.1);
     ctx.beginPath();
     ctx.ellipse(0, 0, Math.max(1, d.majorAxis), Math.max(1, d.minorAxis), 0, 0, Math.PI * 2);
     ctx.stroke();
+    if (d.status === "pending") {
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#ef4444";
+      ctx.font = `700 ${Math.max(10, panorama.width / 50)}px monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", 0, 0);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
+    }
     ctx.restore();
   }
   const barPx = 100 / exp.scale;
@@ -477,14 +607,19 @@ async function exportAnnotatedPng(input: AnnotatedInput): Promise<void> {
   });
 }
 
-function buildGroupSummary(groups: GroupData[]): { rows: unknown[][]; table: string } {
+function buildGroupSummary(groups: GroupData[]): { rows: unknown[][]; table: string; qcRows: unknown[][]; qcTable: string } {
   const headers = [
     "实验组", "类型", "标尺(µm/px)", "计数", "总面积(px²)",
     "均值面积", "中位面积", "面积标准差",
     "均值周长", "均值圆度", "中位圆度",
     "均值长短轴比",
   ];
+  const qcHeaders = [
+    "实验组", "类型", "计数", "自动", "人工", "待确认",
+    "均值面积", "中位圆度", "均值长短轴比",
+  ];
   const rows: unknown[][] = [headers];
+  const qcRows: unknown[][] = [qcHeaders];
   for (const g of groups) {
     const a = summaryStats(g.filtered, "area");
     const p = summaryStats(g.filtered, "perimeter");
@@ -505,12 +640,34 @@ function buildGroupSummary(groups: GroupData[]): { rows: unknown[][]; table: str
       c.median,
       ar,
     ]);
+    const autoCount = g.filtered.filter(d => d.status === "auto").length;
+    const manualCount = g.filtered.filter(d => d.status === "manual").length;
+    const pendingCount = g.filtered.filter(d => d.status === "pending").length;
+    qcRows.push([
+      g.exp.name,
+      g.exp.type,
+      g.filtered.length,
+      autoCount,
+      manualCount,
+      pendingCount,
+      a.mean,
+      c.median,
+      ar,
+    ]);
   }
-  const table =
-    `<table class="ms-table"><thead><tr>${rows[0].map(h => `<th>${String(h)}</th>`).join("")}</tr></thead><tbody>` +
-    rows.slice(1).map(r => `<tr>${r.map(c => `<td>${String(c)}</td>`).join("")}</tr>`).join("") +
+  const esc = (v: unknown) => escapeHtml(String(v));
+  const renderTable = (data: unknown[][]) =>
+    `<table class="ms-table"><thead><tr>${data[0].map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    data.slice(1).map(r => `<tr>${r.map((c, i) => {
+      const cell = esc(String(c));
+      // For QC table column "pending" (index 5), highlight if > 0
+      const pendingHi = data[0][5] === "待确认" && i === 5 && Number(c) > 0
+        ? ` style="background:#fef2f2;color:#991b1b;font-weight:600"`
+        : "";
+      return `<td${pendingHi}>${cell}</td>`;
+    }).join("")}</tr>`).join("") +
     "</tbody></table>";
-  return { rows, table };
+  return { rows, table: renderTable(rows), qcRows, qcTable: renderTable(qcRows) };
 }
 
 function drawHistograms(groups: GroupData[]): Promise<string> {
@@ -538,7 +695,7 @@ function drawHistograms(groups: GroupData[]): Promise<string> {
       if (v.max > globMax) globMax = v.max;
     }
     if (!Number.isFinite(globMin) || globMax - globMin < 1e-9) {
-      html += `<div class="ms-card"><h3>${m.title}</h3><div class="ms-empty">无数据</div></div>`;
+      html += `<div class="ms-card"><h3>${escapeHtml(m.title)}</h3><div class="ms-empty">无数据</div></div>`;
       continue;
     }
     const width = Math.max(globMin - 0.1, 0);
@@ -557,7 +714,7 @@ function drawHistograms(groups: GroupData[]): Promise<string> {
       return { group: vs.group, counts, max: Math.max(...counts, 1) };
     });
     const maxCount = Math.max(...barData.map(b => b.max), 1);
-    html += `<div class="ms-card"><h3>${m.title}</h3>`;
+    html += `<div class="ms-card"><h3>${escapeHtml(m.title)}</h3>`;
     html += `<svg viewBox="0 0 500 240" width="100%" preserveAspectRatio="none" style="height:220px">`;
     for (let i = 0; i <= 4; i++) {
       const y = 20 + (200 * i) / 4;
@@ -578,7 +735,7 @@ function drawHistograms(groups: GroupData[]): Promise<string> {
     html += `<text x="30" y="230" fill="#64748b" font-size="9" font-family="monospace">${fmt(globMin, m.title === "圆度" ? 2 : 1)}</text>`;
     html += `<text x="460" y="230" fill="#64748b" font-size="9" text-anchor="end" font-family="monospace">${fmt(globMax, m.title === "圆度" ? 2 : 1)}</text>`;
     html += "</svg>";
-    html += `<div class="ms-legend">${groups.map(g => `<span><i style="background:${g.exp.color}"></i>${g.exp.name}</span>`).join("")}</div>`;
+    html += `<div class="ms-legend">${groups.map(g => `<span><i style="background:${g.exp.color}"></i>${escapeHtml(g.exp.name)}</span>`).join("")}</div>`;
     html += "</div>";
   }
   html += "</div>";
@@ -658,35 +815,140 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-async function renderReportHtml(groups: GroupData[], opts: { inWindow?: boolean } = {}): Promise<Window> {
+async function renderReportHtml(
+  groups: GroupData[],
+  opts: {
+    inWindow?: boolean;
+    template?: "paper" | "qc" | "supplementary";
+    includePanoramas?: boolean;
+    includeDistributions?: boolean;
+    includeTable?: boolean;
+  } = {}
+): Promise<Window> {
+  const tpl = opts.template ?? "paper";
+  const showPanos = opts.includePanoramas ?? true;
+  const showDists = opts.includeDistributions ?? true;
+  const showTable = opts.includeTable ?? false;
+
   const today = new Date().toLocaleString("zh-CN");
-  const { rows, table } = buildGroupSummary(groups);
-  const histograms = await drawHistograms(groups);
+  const { rows, table, qcTable } = buildGroupSummary(groups);
+  const histograms = showDists ? await drawHistograms(groups) : "";
   const chartPng = await renderChartPng(groups);
 
   const panoramaImages: { name: string; color: string; png: string | null; summary: string }[] = [];
-  for (const g of groups) {
-    let png: string | null = null;
-    if (g.panorama) {
-      const canvas = await renderAnnotatedCanvas({ exp: g.exp, panorama: g.panorama, detections: g.detections, filter: g.filter });
-      png = canvas.toDataURL("image/png", 0.9);
+  if (showPanos) {
+    for (const g of groups) {
+      let png: string | null = null;
+      if (g.panorama) {
+        const canvas = await renderAnnotatedCanvas({ exp: g.exp, panorama: g.panorama, detections: g.detections, filter: g.filter });
+        png = canvas.toDataURL("image/png", 0.9);
+      }
+      const a = summaryStats(g.filtered, "area");
+      const c = summaryStats(g.filtered, "circularity");
+      const autoN = g.filtered.filter(d => d.status === "auto").length;
+      const manualN = g.filtered.filter(d => d.status === "manual").length;
+      const pendingN = g.filtered.filter(d => d.status === "pending").length;
+      const statusPart = tpl === "qc"
+        ? ` · 自动 ${autoN} · 人工 ${manualN} · 待确认 ${pendingN}`
+        : "";
+      panoramaImages.push({
+        name: g.exp.name,
+        color: g.exp.color,
+        png,
+        summary:
+          `计数 ${g.filtered.length}${statusPart} · 均值面积 ${fmt(a.mean)} px² · 中位圆度 ${fmt(c.median, 2)} · 标尺 ${g.exp.scale} µm/px`,
+      });
     }
-    const a = summaryStats(g.filtered, "area");
-    const c = summaryStats(g.filtered, "circularity");
-    panoramaImages.push({
-      name: g.exp.name,
-      color: g.exp.color,
-      png,
-      summary:
-        `计数 ${g.filtered.length} · 均值面积 ${fmt(a.mean)} px² · 中位圆度 ${fmt(c.median, 2)} · 标尺 ${g.exp.scale} µm/px`,
-    });
   }
+
+  const totalCells = groups.reduce((s, g) => s + g.filtered.length, 0);
+  const totalTiles = groups.reduce((s, g) => s + (useStore.getState().tiles[g.exp.id]?.length ?? 0), 0);
+  const totalAuto = groups.reduce((s, g) => s + g.filtered.filter(d => d.status === "auto").length, 0);
+  const totalManual = groups.reduce((s, g) => s + g.filtered.filter(d => d.status === "manual").length, 0);
+  const totalPending = groups.reduce((s, g) => s + g.filtered.filter(d => d.status === "pending").length, 0);
+
+  const TITLES: Record<string, string> = {
+    paper: "显微图像分析实验报告（论文版）",
+    qc: "显微图像分析实验报告（内部质控版）",
+    supplementary: "显微图像分析实验报告（补充材料版）",
+  };
+  const subtitle: Record<string, string> = {
+    paper: "侧重核心统计结论与代表性全景图",
+    qc: "包含自动/人工/待确认复核状态的质控视图",
+    supplementary: "全景图全覆盖 + 参数分布 + 全量明细表",
+  };
+
+  const overviewHtml = tpl === "qc"
+    ? `
+  <div class="ms-summary">
+    <div>实验组<strong>${groups.length}</strong></div>
+    <div>视野总数<strong>${totalTiles}</strong></div>
+    <div>累计检测<strong>${totalCells}</strong></div>
+    <div>自动检测<strong style="color:#0d9488">${totalAuto}</strong></div>
+    <div>人工标记<strong style="color:#b45309">${totalManual}</strong></div>
+    <div>待确认<strong style="color:#991b1b">${totalPending}</strong></div>
+    <div>全景图<strong>${groups.filter(g => g.panorama).length}</strong></div>
+  </div>`
+    : `
+  <div class="ms-summary">
+    <div>实验组<strong>${groups.length}</strong></div>
+    <div>视野总数<strong>${totalTiles}</strong></div>
+    <div>累计检测<strong>${totalCells}</strong></div>
+    <div>全景图<strong>${groups.filter(g => g.panorama).length}</strong></div>
+  </div>`;
+
+  const statsSectionHtml = tpl === "qc"
+    ? `<section class="ms-section">
+  <h2>组间对比统计（质控）</h2>
+  ${chartPng ? `<figure class="ms-figure" style="margin-bottom:18px"><img src="${chartPng}" alt="组间对比" /></figure>` : ""}
+  ${qcTable}
+</section>`
+    : `<section class="ms-section">
+  <h2>组间对比统计</h2>
+  ${chartPng ? `<figure class="ms-figure" style="margin-bottom:18px"><img src="${chartPng}" alt="组间对比" /></figure>` : ""}
+  ${table}
+</section>`;
+
+  const distSectionHtml = showDists ? `<section class="ms-section">
+  <h2>形态参数分布</h2>
+  ${histograms}
+</section>` : "";
+
+  const panosSectionHtml = showPanos ? `<section class="ms-section">
+  <h2>带标注全景图</h2>
+  ${panoramaImages.length === 0
+    ? `<div class="ms-empty">无全景图数据</div>`
+    : `<div class="ms-panos">${panoramaImages.map(p => `<figure class="ms-pano">
+      <div class="ms-pano-head">
+        <span class="ms-pano-swatch" style="background:${p.color}"></span>
+        <span class="ms-pano-name">${escapeHtml(p.name)}</span>
+      </div>
+      ${p.png ? `<img src="${p.png}" alt="全景图" />` : `<div class="ms-empty">无全景图</div>`}
+      <figcaption class="ms-pano-caption">${escapeHtml(p.summary)}</figcaption>
+    </figure>`).join("")}</div>`}
+</section>` : "";
+
+  const detailSectionHtml = showTable
+    ? `<section class="ms-section">
+  <h2>导出条目明细</h2>
+  <div class="ms-metric-grid">
+    <div class="ms-metric"><div class="k">CSV 汇总</div><div class="v">${groups.length} 行</div></div>
+    <div class="ms-metric"><div class="k">CSV 明细</div><div class="v">各组测量.csv</div></div>
+    <div class="ms-metric"><div class="k">PNG 标注</div><div class="v">${panoramaImages.filter(p => p.png).length}</div></div>
+    <div class="ms-metric"><div class="k">项目包</div><div class="v">.micproj</div></div>
+  </div>
+  <p style="margin-top:12px;color:#475569;font-size:12px;">
+    此报告在「对比与导出」页生成；原始明细表格 CSV、项目包备份可在平台内继续导出，用于论文补充材料。
+  </p>
+</section>`
+    : "";
 
   const css = `
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
     body { font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; color: #1e2430; background: #ffffff; max-width: 960px; margin: 0 auto; padding: 48px 40px 64px; }
     h1 { font-size: 26px; margin: 0 0 4px; color: #0f172a; letter-spacing: 0.01em; }
+    .subtitle { color: #475569; font-size: 13px; margin-bottom: 8px; }
     .meta { color: #64748b; font-size: 12px; font-family: "IBM Plex Mono", ui-monospace, monospace; margin-bottom: 32px; }
     .ms-section { margin-top: 40px; }
     .ms-section h2 { font-size: 16px; margin: 0 0 16px; color: #0f172a; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; }
@@ -726,65 +988,25 @@ async function renderReportHtml(groups: GroupData[], opts: { inWindow?: boolean 
     }
   `;
 
-  const totalCells = groups.reduce((s, g) => s + g.filtered.length, 0);
-  const totalTiles = groups.reduce((s, g) => s + (useStore.getState().tiles[g.exp.id]?.length ?? 0), 0);
-
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>MicroStitch 实验报告</title>
 <style>${css}</style>
 </head>
 <body>
-<h1>显微图像分析实验报告</h1>
-<div class="meta">生成时间：${today} · MicroStitch Platform</div>
+<h1>${escapeHtml(TITLES[tpl])}</h1>
+<div class="subtitle">${escapeHtml(subtitle[tpl])}</div>
+<div class="meta">生成时间：${today} · MicroStitch Platform · ${escapeHtml(TITLES[tpl])}</div>
 
 <section class="ms-section">
   <h2>实验概览</h2>
-  <div class="ms-summary">
-    <div>实验组<strong>${groups.length}</strong></div>
-    <div>视野总数<strong>${totalTiles}</strong></div>
-    <div>累计检测<strong>${totalCells}</strong></div>
-    <div>全景图<strong>${groups.filter(g => g.panorama).length}</strong></div>
-  </div>
+  ${overviewHtml}
 </section>
 
-<section class="ms-section">
-  <h2>组间对比统计</h2>
-  ${chartPng ? `<figure class="ms-figure" style="margin-bottom:18px"><img src="${chartPng}" alt="组间对比" /></figure>` : ""}
-  ${table}
-</section>
-
-<section class="ms-section">
-  <h2>形态参数分布</h2>
-  ${histograms}
-</section>
-
-<section class="ms-section">
-  <h2>带标注全景图</h2>
-  ${panoramaImages.length === 0
-    ? `<div class="ms-empty">无全景图数据</div>`
-    : `<div class="ms-panos">${panoramaImages.map(p => `<figure class="ms-pano">
-      <div class="ms-pano-head">
-        <span class="ms-pano-swatch" style="background:${p.color}"></span>
-        <span class="ms-pano-name">${escapeHtml(p.name)}</span>
-      </div>
-      ${p.png ? `<img src="${p.png}" alt="全景图" />` : `<div class="ms-empty">无全景图</div>`}
-      <figcaption class="ms-pano-caption">${escapeHtml(p.summary)}</figcaption>
-    </figure>`).join("")}</div>`}
-</section>
-
-<section class="ms-section">
-  <h2>导出条目明细</h2>
-  <div class="ms-metric-grid">
-    <div class="ms-metric"><div class="k">CSV 汇总</div><div class="v">${groups.length} 行</div></div>
-    <div class="ms-metric"><div class="k">CSV 明细</div><div class="v">各组测量.csv</div></div>
-    <div class="ms-metric"><div class="k">PNG 标注</div><div class="v">${panoramaImages.filter(p => p.png).length}</div></div>
-    <div class="ms-metric"><div class="k">项目包</div><div class="v">.micproj</div></div>
-  </div>
-  <p style="margin-top:12px;color:#475569;font-size:12px;">
-    此报告在「对比与导出」页生成；原始明细表格 CSV、项目包备份可在平台内继续导出，用于论文补充材料。
-  </p>
-</section>
+${statsSectionHtml}
+${distSectionHtml}
+${panosSectionHtml}
+${detailSectionHtml}
 
 <div class="ms-foot">Generated by MicroStitch · 基于 Harris + NCC 特征配准 · 分水岭分割 · 多频带融合</div>
 </body></html>`;

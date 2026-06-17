@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   Detection,
+  DetectionStatus,
   Experiment,
   MorphFilter,
   Panorama,
@@ -48,11 +49,29 @@ function pushStorageWarning(msg: string) {
 const WARN_QUOTA_PCT = 0.85;
 const HARD_LOCAL_LIMIT_BYTES = 3.5 * 1024 * 1024; // ~3.5MB localStorage upper bound
 
+function migrateDetection(d: Detection): Detection {
+  if (d.status) return d;
+  return {
+    ...d,
+    status: d.manual ? "manual" : "auto",
+  };
+}
+
+function migrateMeta(m: Partial<PersistShape>): Partial<PersistShape> {
+  if (!m.detections) return m;
+  const out: typeof m.detections = {};
+  for (const [k, list] of Object.entries(m.detections)) {
+    if (Array.isArray(list)) out[k] = list.map(migrateDetection);
+  }
+  return { ...m, detections: out };
+}
+
 function loadPersistedMeta(): Partial<PersistShape> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as Partial<PersistShape>;
+    const parsed = JSON.parse(raw) as Partial<PersistShape>;
+    return migrateMeta(parsed);
   } catch {
     return {};
   }
@@ -245,7 +264,8 @@ interface StoreState extends PersistShape {
 
   setPanorama: (expId: string, p: Panorama | null) => void;
   setDetections: (expId: string, dets: Detection[]) => void;
-  addManualDetection: (expId: string, det: Omit<Detection, "id" | "manual">) => void;
+  addManualDetection: (expId: string, det: Omit<Detection, "id" | "manual" | "status">) => void;
+  updateDetectionStatus: (expId: string, id: number, status: DetectionStatus) => void;
   removeDetection: (expId: string, id: number) => void;
   clearDetections: (expId: string) => void;
   setFilter: (expId: string, filter: Partial<MorphFilter>) => void;
@@ -430,7 +450,8 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setDetections: (expId, dets) => {
     set((s) => {
-      const next = { ...s, detections: { ...s.detections, [expId]: dets } };
+      const migrated = dets.map(migrateDetection);
+      const next = { ...s, detections: { ...s.detections, [expId]: migrated } };
       persist(next as PersistShape);
       return next;
     });
@@ -440,8 +461,17 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const list = s.detections[expId] ?? [];
       const maxId = list.reduce((m, d) => Math.max(m, d.id), -1);
-      const newDet: Detection = { ...det, id: maxId + 1, manual: true };
+      const newDet: Detection = { ...det, id: maxId + 1, manual: true, status: "manual" };
       const next = { ...s, detections: { ...s.detections, [expId]: [...list, newDet] } };
+      persist(next as PersistShape);
+      return next;
+    });
+  },
+
+  updateDetectionStatus: (expId, id, status) => {
+    set((s) => {
+      const list = (s.detections[expId] ?? []).map((d) => (d.id === id ? { ...d, status } : d));
+      const next = { ...s, detections: { ...s.detections, [expId]: list } };
       persist(next as PersistShape);
       return next;
     });
@@ -516,7 +546,7 @@ export const useStore = create<StoreState>((set, get) => ({
       for (const [oldId, d] of Object.entries(input.detections)) {
         const nid = idMap[oldId];
         if (!nid) continue;
-        detections[nid] = d;
+        detections[nid] = d.map(migrateDetection);
       }
       const filters: PersistShape["filters"] = {};
       for (const [oldId, f] of Object.entries(input.filters)) {

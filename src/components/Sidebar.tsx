@@ -11,6 +11,7 @@ import {
   CircleDot,
   Lock,
   Download,
+  ListChecks,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useStore } from "@/store/useStore";
@@ -49,6 +50,7 @@ export function Sidebar() {
 
   const navItems = [
     { label: "实验工作台", icon: <Microscope size={16} />, path: "/", active: location.pathname === "/" },
+    { label: "批处理", icon: <ListChecks size={16} />, path: "/batch", active: location.pathname === "/batch" },
     { label: "对比与导出", icon: <GitCompareArrows size={16} />, path: "/compare", active: location.pathname === "/compare" },
   ];
 
