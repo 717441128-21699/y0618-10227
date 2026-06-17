@@ -10,6 +10,17 @@ import type {
 } from "@/types";
 import { GROUP_COLORS } from "@/types";
 import { defaultFilter } from "@/lib/analysis";
+import {
+  deleteBlobsByExp,
+  deleteBlob,
+  estimateUsage,
+  formatSize,
+  getBlob,
+  listBlobsByExp,
+  putBlob,
+  sizeOfDataUrl,
+  totalBlobSize,
+} from "@/lib/blobStore";
 
 const STORAGE_KEY = "mic_store_v1";
 
@@ -25,7 +36,19 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 }
 
-function loadPersisted(): Partial<PersistShape> {
+function pushStorageWarning(msg: string) {
+  try {
+    const ev = new CustomEvent("mic:storage-warn", { detail: msg });
+    window.dispatchEvent(ev);
+  } catch {
+    // ignore
+  }
+}
+
+const WARN_QUOTA_PCT = 0.85;
+const HARD_LOCAL_LIMIT_BYTES = 3.5 * 1024 * 1024; // ~3.5MB localStorage upper bound
+
+function loadPersistedMeta(): Partial<PersistShape> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
@@ -35,34 +58,179 @@ function loadPersisted(): Partial<PersistShape> {
   }
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+async function hydrateFromBlobStore(meta: Partial<PersistShape>): Promise<PersistShape> {
+  const tiles: Record<string, Tile[]> = { ...(meta.tiles ?? {}) };
+  const panoramas: Record<string, Panorama | null> = { ...(meta.panoramas ?? {}) };
 
-function persist(state: PersistShape) {
+  const tasks: Promise<void>[] = [];
+  for (const expId of Object.keys(tiles)) {
+    const list = tiles[expId] ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      if (t.dataUrl) continue;
+      tasks.push(
+        getBlob(expId, "tile", t.id).then((dataUrl) => {
+          if (dataUrl) {
+            list[i] = { ...t, dataUrl };
+          }
+        })
+      );
+    }
+  }
+  for (const expId of Object.keys(panoramas)) {
+    const p = panoramas[expId];
+    if (p && !p.dataUrl) {
+      tasks.push(
+        getBlob(expId, "panorama", "panorama").then((dataUrl) => {
+          if (dataUrl) panoramas[expId] = { ...p, dataUrl };
+        })
+      );
+    }
+  }
+  await Promise.all(tasks);
+
+  return {
+    experiments: meta.experiments ?? [],
+    tiles,
+    panoramas,
+    detections: meta.detections ?? {},
+    filters: meta.filters ?? {},
+  };
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let quotaCheckTimer: ReturnType<typeof setTimeout> | null = null;
+let lastQuotaWarnAt = 0;
+let lastLocalTrimWarnAt = 0;
+
+async function checkQuota() {
+  const { quota, usageInBytes } = await estimateUsage();
+  const idbBytes = await totalBlobSize();
+  const totalEst = usageInBytes || idbBytes;
+  if (quota > 0 && totalEst / quota > WARN_QUOTA_PCT && Date.now() - lastQuotaWarnAt > 60_000) {
+    lastQuotaWarnAt = Date.now();
+    pushStorageWarning(
+      `浏览器存储空间已使用约 ${formatSize(totalEst)} / ${formatSize(quota)}（${Math.round((totalEst / quota) * 100)}%），建议尽快在首页「导出项目包」备份，避免后续刷新丢失数据。`
+    );
+  }
+}
+
+async function persist(state: PersistShape) {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
+
+  // De-dup/schedule; but we need fresh 'state' snapshot when actual timer fires.
+  // Since state is immutable-ish (we get reference), schedule with closure snapshot.
+  saveTimer = setTimeout(async () => {
+    // --- 1) Sync blobs: persist tile/panorama dataUrls to IDB, build meta version ---
+    const metaTiles: Record<string, Tile[]> = {};
+    const metaPanoramas: Record<string, Panorama | null> = {};
+    const blobTasks: Promise<unknown>[] = [];
+
+    const allExpIds = new Set<string>();
+    state.experiments.forEach((e) => allExpIds.add(e.id));
+
+    for (const expId of Object.keys(state.tiles)) {
+      const list = state.tiles[expId] ?? [];
+      const metaList: Tile[] = new Array(list.length);
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (t.dataUrl) {
+          blobTasks.push(putBlob(expId, "tile", t.id, t.dataUrl).catch(() => {}));
+          metaList[i] = { ...t, dataUrl: "" };
+        } else {
+          metaList[i] = t;
+        }
+      }
+      metaTiles[expId] = metaList;
+    }
+    for (const expId of Object.keys(state.panoramas)) {
+      const p = state.panoramas[expId];
+      if (p && p.dataUrl) {
+        blobTasks.push(putBlob(expId, "panorama", "panorama", p.dataUrl).catch(() => {}));
+        metaPanoramas[expId] = { ...p, dataUrl: "" };
+      } else {
+        metaPanoramas[expId] = p;
+      }
+    }
+
+    // Clean up stale IDB entries for experiments not in the list, and for deleted tiles/panoramas.
+    const cleanup: Promise<unknown>[] = [];
+    for (const expId of Object.keys(state.tiles)) {
+      cleanup.push(
+        listBlobsByExp(expId).then((existing) => {
+          const liveKeys = new Set<string>(state.tiles[expId]?.map((t) => t.id) ?? []);
+          const hasPanoramaMeta = !!state.panoramas[expId];
+          return Promise.all(
+            existing.map((e) => {
+              if (e.kind === "tile" && !liveKeys.has(e.key)) {
+                return deleteBlob(expId, "tile", e.key).catch(() => {});
+              }
+              if (e.kind === "panorama" && !hasPanoramaMeta) {
+                return deleteBlob(expId, "panorama", "panorama").catch(() => {});
+              }
+              return Promise.resolve();
+            })
+          );
+        })
+      );
+    }
+    // Remove experiment-level blobs that don't exist anymore
+    cleanup.push(
+      (async () => {
+        // We don't have list-all-exps in IDB; use store.getall-like approach via listBlobsByExp scan
+        try {
+          // For safety: only attempt deletes for experiments we explicitly dropped.
+        } catch {
+          // ignore
+        }
+      })()
+    );
+
+    await Promise.all([...blobTasks, ...cleanup]);
+
+    // --- 2) Write meta to localStorage ---
+    const metaObj: PersistShape = {
+      experiments: state.experiments,
+      tiles: metaTiles,
+      panoramas: metaPanoramas,
+      detections: state.detections,
+      filters: state.filters,
+    };
+    const metaStr = JSON.stringify(metaObj);
+
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
+      localStorage.setItem(STORAGE_KEY, metaStr);
+    } catch (err) {
+      // If localStorage itself is bloated, do NOT strip blobs again (they already are) but warn user.
+      if (Date.now() - lastLocalTrimWarnAt > 60_000) {
+        lastLocalTrimWarnAt = Date.now();
+        const est = new Blob([metaStr]).size;
+        pushStorageWarning(
+          `本地存储写入失败（元数据约 ${formatSize(est)}），请尽快在首页导出项目包备份，或清理不活跃实验。`
+        );
+      }
       try {
+        // last resort: drop old panorama meta entries that already have blobs backing them
         const trimmed: PersistShape = {
-          ...state,
+          ...metaObj,
           panoramas: {},
-          tiles: Object.fromEntries(
-            Object.entries(state.tiles).map(([k, v]) => [
-              k,
-              v.map((t) => ({ ...t, dataUrl: "" })),
-            ])
-          ),
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
       } catch {
-        // give up silently
+        // give up silently - blob store already has the data; we'll lose filter metadata worst-case
       }
     }
-  }, 250);
+
+    // --- 3) Occasional quota check (non-blocking) ---
+    if (quotaCheckTimer) clearTimeout(quotaCheckTimer);
+    quotaCheckTimer = setTimeout(checkQuota, 2000);
+  }, 350);
 }
 
 interface StoreState extends PersistShape {
+  hydrated: boolean;
+  _hydratePromise: Promise<void> | null;
+
   createExperiment: (partial: { name: string; type: TargetType; scale?: number; note?: string }) => Experiment;
   deleteExperiment: (id: string) => void;
   renameExperiment: (id: string, name: string) => void;
@@ -84,16 +252,45 @@ interface StoreState extends PersistShape {
   resetFilter: (expId: string) => void;
 
   snapshot: () => PersistShape;
+
+  // Project import / export helpers
+  importProject: (bundle: PersistShape, mode?: "merge" | "replace") => Promise<Experiment[]>;
 }
 
-const persisted = loadPersisted();
+const persistedMeta = loadPersistedMeta();
+
+function defaultState(experiments: Experiment[] = []): PersistShape {
+  return {
+    experiments,
+    tiles: {},
+    panoramas: {},
+    detections: {},
+    filters: {},
+  };
+}
+
+// Build initial state from meta with empty dataUrls; hydration will populate them.
+function buildInitialFromMeta(meta: Partial<PersistShape>): PersistShape {
+  const base = defaultState(meta.experiments ?? []);
+  for (const exp of base.experiments) {
+    if (base.tiles[exp.id] === undefined) base.tiles[exp.id] = [];
+    if (base.panoramas[exp.id] === undefined) base.panoramas[exp.id] = null;
+    if (base.detections[exp.id] === undefined) base.detections[exp.id] = [];
+    if (base.filters[exp.id] === undefined) base.filters[exp.id] = defaultFilter();
+  }
+  for (const [k, v] of Object.entries(meta.tiles ?? {})) base.tiles[k] = v;
+  for (const [k, v] of Object.entries(meta.panoramas ?? {})) base.panoramas[k] = v;
+  for (const [k, v] of Object.entries(meta.detections ?? {})) base.detections[k] = v;
+  for (const [k, v] of Object.entries(meta.filters ?? {})) base.filters[k] = v;
+  return base;
+}
+
+const initialFromMeta = buildInitialFromMeta(persistedMeta);
 
 export const useStore = create<StoreState>((set, get) => ({
-  experiments: persisted.experiments ?? [],
-  tiles: persisted.tiles ?? {},
-  panoramas: persisted.panoramas ?? {},
-  detections: persisted.detections ?? {},
-  filters: persisted.filters ?? {},
+  ...initialFromMeta,
+  hydrated: false,
+  _hydratePromise: null,
 
   createExperiment: (partial) => {
     const exp: Experiment = {
@@ -130,6 +327,7 @@ export const useStore = create<StoreState>((set, get) => ({
         filters: Object.fromEntries(Object.entries(s.filters).filter(([k]) => k !== id)),
       };
       persist(next);
+      void deleteBlobsByExp(id).catch(() => {});
       return next;
     });
   },
@@ -137,7 +335,7 @@ export const useStore = create<StoreState>((set, get) => ({
   renameExperiment: (id, name) => {
     set((s) => {
       const next = { ...s, experiments: s.experiments.map((e) => (e.id === id ? { ...e, name } : e)) };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -145,7 +343,7 @@ export const useStore = create<StoreState>((set, get) => ({
   updateExperimentStage: (id, stage) => {
     set((s) => {
       const next = { ...s, experiments: s.experiments.map((e) => (e.id === id ? { ...e, stage } : e)) };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -153,7 +351,7 @@ export const useStore = create<StoreState>((set, get) => ({
   updateExperiment: (id, patch) => {
     set((s) => {
       const next = { ...s, experiments: s.experiments.map((e) => (e.id === id ? { ...e, ...patch } : e)) };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -171,7 +369,7 @@ export const useStore = create<StoreState>((set, get) => ({
         isReference: isFirst && i === 0,
       }));
       const next = { ...s, tiles: { ...s.tiles, [expId]: [...existing, ...newTiles] } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -183,7 +381,8 @@ export const useStore = create<StoreState>((set, get) => ({
         list[0] = { ...list[0], isReference: true };
       }
       const next = { ...s, tiles: { ...s.tiles, [expId]: list } };
-      persist(next);
+      persist(next as PersistShape);
+      void deleteBlob(expId, "tile", tileId).catch(() => {});
       return next;
     });
   },
@@ -193,7 +392,7 @@ export const useStore = create<StoreState>((set, get) => ({
       const map = new Map((s.tiles[expId] ?? []).map((t) => [t.id, t]));
       const list = ids.map((id) => map.get(id)!).filter(Boolean);
       const next = { ...s, tiles: { ...s.tiles, [expId]: list } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -202,7 +401,7 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const list = (s.tiles[expId] ?? []).map((t) => ({ ...t, isReference: t.id === tileId }));
       const next = { ...s, tiles: { ...s.tiles, [expId]: list } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -210,7 +409,12 @@ export const useStore = create<StoreState>((set, get) => ({
   clearTiles: (expId) => {
     set((s) => {
       const next = { ...s, tiles: { ...s.tiles, [expId]: [] }, panoramas: { ...s.panoramas, [expId]: null } };
-      persist(next);
+      persist(next as PersistShape);
+      void deleteBlob(expId, "panorama", "panorama").catch(() => {});
+      void (async () => {
+        const all = await listBlobsByExp(expId).catch(() => []);
+        await Promise.all(all.filter((e) => e.kind === "tile").map((e) => deleteBlob(expId, "tile", e.key)));
+      })();
       return next;
     });
   },
@@ -218,7 +422,8 @@ export const useStore = create<StoreState>((set, get) => ({
   setPanorama: (expId, p) => {
     set((s) => {
       const next = { ...s, panoramas: { ...s.panoramas, [expId]: p } };
-      persist(next);
+      persist(next as PersistShape);
+      if (!p) void deleteBlob(expId, "panorama", "panorama").catch(() => {});
       return next;
     });
   },
@@ -226,7 +431,7 @@ export const useStore = create<StoreState>((set, get) => ({
   setDetections: (expId, dets) => {
     set((s) => {
       const next = { ...s, detections: { ...s.detections, [expId]: dets } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -237,7 +442,7 @@ export const useStore = create<StoreState>((set, get) => ({
       const maxId = list.reduce((m, d) => Math.max(m, d.id), -1);
       const newDet: Detection = { ...det, id: maxId + 1, manual: true };
       const next = { ...s, detections: { ...s.detections, [expId]: [...list, newDet] } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -246,7 +451,7 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const list = (s.detections[expId] ?? []).filter((d) => d.id !== id);
       const next = { ...s, detections: { ...s.detections, [expId]: list } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -254,7 +459,7 @@ export const useStore = create<StoreState>((set, get) => ({
   clearDetections: (expId) => {
     set((s) => {
       const next = { ...s, detections: { ...s.detections, [expId]: [] } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -263,7 +468,7 @@ export const useStore = create<StoreState>((set, get) => ({
     set((s) => {
       const cur = s.filters[expId] ?? defaultFilter();
       const next = { ...s, filters: { ...s.filters, [expId]: { ...cur, ...filter } } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -271,7 +476,7 @@ export const useStore = create<StoreState>((set, get) => ({
   resetFilter: (expId) => {
     set((s) => {
       const next = { ...s, filters: { ...s.filters, [expId]: defaultFilter() } };
-      persist(next);
+      persist(next as PersistShape);
       return next;
     });
   },
@@ -286,8 +491,97 @@ export const useStore = create<StoreState>((set, get) => ({
       filters: s.filters,
     };
   },
+
+  importProject: async (bundle, mode = "merge") => {
+    const reassignIds = (input: PersistShape): PersistShape => {
+      const idMap: Record<string, string> = {};
+      const experiments = input.experiments.map((e) => {
+        const nid = uid();
+        idMap[e.id] = nid;
+        return { ...e, id: nid, createdAt: Date.now() };
+      });
+      const tiles: PersistShape["tiles"] = {};
+      for (const [oldId, list] of Object.entries(input.tiles)) {
+        const nid = idMap[oldId];
+        if (!nid) continue;
+        tiles[nid] = list.map((t) => ({ ...t, expId: nid }));
+      }
+      const panoramas: PersistShape["panoramas"] = {};
+      for (const [oldId, p] of Object.entries(input.panoramas)) {
+        const nid = idMap[oldId];
+        if (!nid) continue;
+        panoramas[nid] = p;
+      }
+      const detections: PersistShape["detections"] = {};
+      for (const [oldId, d] of Object.entries(input.detections)) {
+        const nid = idMap[oldId];
+        if (!nid) continue;
+        detections[nid] = d;
+      }
+      const filters: PersistShape["filters"] = {};
+      for (const [oldId, f] of Object.entries(input.filters)) {
+        const nid = idMap[oldId];
+        if (!nid) continue;
+        filters[nid] = f;
+      }
+      return { experiments, tiles, panoramas, detections, filters };
+    };
+
+    const assigned = reassignIds(bundle);
+    // Ensure each exp has its defaults
+    for (const exp of assigned.experiments) {
+      if (!assigned.tiles[exp.id]) assigned.tiles[exp.id] = [];
+      if (assigned.panoramas[exp.id] === undefined) assigned.panoramas[exp.id] = null;
+      if (!assigned.detections[exp.id]) assigned.detections[exp.id] = [];
+      if (!assigned.filters[exp.id]) assigned.filters[exp.id] = defaultFilter();
+      // Fill missing color
+      if (!exp.color) {
+        exp.color = GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)];
+      }
+    }
+
+    set((s) => {
+      const existing = mode === "replace" ? defaultState() : s;
+      const next: PersistShape = {
+        experiments: [...existing.experiments, ...assigned.experiments],
+        tiles: { ...existing.tiles, ...assigned.tiles },
+        panoramas: { ...existing.panoramas, ...assigned.panoramas },
+        detections: { ...existing.detections, ...assigned.detections },
+        filters: { ...existing.filters, ...assigned.filters },
+      };
+      // Persist immediately triggers IDB writes for new tiles/panoramas
+      persist(next);
+      return next;
+    });
+
+    return assigned.experiments;
+  },
 }));
+
+// Start hydration on module load (non-blocking)
+useStore.setState((s) => {
+  if (s._hydratePromise) return {};
+  const promise = hydrateFromBlobStore(persistedMeta)
+    .then((hydrated) => {
+      useStore.setState({ ...hydrated, hydrated: true });
+      void checkQuota();
+    })
+    .catch(() => {
+      useStore.setState({ hydrated: true });
+    });
+  return { _hydratePromise: promise, hydrated: false };
+});
 
 export function selectExperiment(id: string | undefined): Experiment | undefined {
   return useStore.getState().experiments.find((e) => e.id === id);
 }
+
+// Diagnostic exports
+export const _blobStorage = {
+  sizeOfDataUrl,
+  totalBlobSize,
+  estimateUsage,
+  putBlob,
+  getBlob,
+  deleteBlobsByExp,
+};

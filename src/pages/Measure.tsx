@@ -23,6 +23,7 @@ import {
   fmt,
 } from "@/lib/analysis";
 import type { Stats } from "@/types";
+import { downloadCsv, sanitizeName } from "@/lib/export";
 import { cn } from "@/lib/utils";
 
 type SortKey = "id" | "area" | "perimeter" | "majorAxis" | "minorAxis" | "circularity" | "angle";
@@ -71,27 +72,23 @@ export default function Measure() {
 
   const exportCSV = () => {
     const rows = [
-      ["#", "面积(px²)", "周长(px)", "长轴(px)", "短轴(px)", "长短轴比", "圆度", "角度(°)", "来源"],
+      ["实验组", exp?.name ?? ""],
+      ["标尺(µm/px)", scale, "单位", usePhysical ? "物理" : "像素"],
+      [],
+      ["#", `面积(${uA})`, `周长(${uL})`, `长轴(${uL})`, `短轴(${uL})`, "长短轴比", "圆度", "角度(°)", "来源"],
       ...sorted.map((d, i) => [
         i + 1,
-        d.area.toFixed(0),
-        d.perimeter.toFixed(1),
-        d.majorAxis.toFixed(2),
-        d.minorAxis.toFixed(2),
+        A(d.area).toFixed(uA === "px²" ? 0 : 2),
+        L(d.perimeter).toFixed(uL === "px" ? 1 : 2),
+        L(d.majorAxis).toFixed(uL === "px" ? 2 : 3),
+        L(d.minorAxis).toFixed(uL === "px" ? 2 : 3),
         aspectRatioOf(d).toFixed(2),
         d.circularity.toFixed(3),
         ((d.angle * 180) / Math.PI).toFixed(1),
         d.manual ? "手动" : "自动",
       ]),
     ];
-    const csv = rows.map((r) => r.join(",")).join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${exp?.name ?? "experiment"}_measurements.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(rows, `${sanitizeName(exp?.name ?? "experiment")}_measurements.csv`);
   };
 
   const L = (px: number) => (usePhysical ? px * scale : px);

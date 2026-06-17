@@ -10,9 +10,10 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  size?: "md" | "lg" | "xl";
 }
 
-export function Modal({ open, onClose, title, subtitle, children, footer, className }: ModalProps) {
+export function Modal({ open, onClose, title, subtitle, children, footer, className, size = "md" }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -31,7 +32,10 @@ export function Modal({ open, onClose, title, subtitle, children, footer, classN
       />
       <div
         className={cn(
-          "relative w-full max-w-lg animate-fade-up rounded-lg border border-ink-600/80 bg-ink-800 shadow-panel",
+          "relative w-full animate-fade-up rounded-lg border border-ink-600/80 bg-ink-800 shadow-panel",
+          size === "md" && "max-w-lg",
+          size === "lg" && "max-w-3xl",
+          size === "xl" && "max-w-5xl",
           className
         )}
       >

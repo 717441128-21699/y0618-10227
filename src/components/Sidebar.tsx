@@ -10,9 +10,11 @@ import {
   CircleCheck,
   CircleDot,
   Lock,
+  Download,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useStore } from "@/store/useStore";
+import { useGlobalDialog } from "@/lib/globalDialog";
 import { cn } from "@/lib/utils";
 import type { WorkflowStage } from "@/types";
 import type { TargetType } from "@/types";
@@ -32,6 +34,7 @@ const TYPE_LABEL: Record<TargetType, string> = {
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { setOpenCreateExperiment, setOpenImportProject } = useGlobalDialog();
   const match = location.pathname.match(/^\/(stitch|count|measure)\/(.+)$/);
   const activeStage = match?.[1] as WorkflowStage | undefined;
   const expId = match?.[2];
@@ -79,13 +82,20 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="px-3">
+      <div className="px-3 flex flex-col gap-2">
         <button
           className="btn btn-primary w-full justify-start"
-          onClick={() => navigate("/")}
+          onClick={() => setOpenCreateExperiment(true)}
         >
           <Plus size={14} />
           新建实验
+        </button>
+        <button
+          className="btn w-full justify-start"
+          onClick={() => setOpenImportProject(true)}
+        >
+          <Download size={14} />
+          导入项目包
         </button>
       </div>
 

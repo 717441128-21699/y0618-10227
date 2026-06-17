@@ -9,6 +9,7 @@ import {
   Boxes,
   FlaskConical,
   Check,
+  Download,
 } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { readImageFilesToTiles } from "@/lib/image";
@@ -31,10 +32,12 @@ interface Props {
   tileCount: number;
   detectionCount: number;
   hasPanorama: boolean;
-  index: number;
+  index?: number;
+  extraMeta?: React.ReactNode;
+  onExport?: () => void;
 }
 
-export function ExperimentCard({ exp, tileCount, detectionCount, hasPanorama, index }: Props) {
+export function ExperimentCard({ exp, tileCount, detectionCount, hasPanorama, index, extraMeta, onExport }: Props) {
   const navigate = useNavigate();
   const addTiles = useStore((s) => s.addTiles);
   const deleteExperiment = useStore((s) => s.deleteExperiment);
@@ -74,7 +77,7 @@ export function ExperimentCard({ exp, tileCount, detectionCount, hasPanorama, in
         "group relative flex animate-fade-up flex-col overflow-hidden rounded-lg border bg-ink-800/70 transition",
         dragOver ? "border-fluor shadow-glow" : "border-ink-600/70 hover:border-ink-500"
       )}
-      style={{ animationDelay: `${index * 40}ms` }}
+      style={{ animationDelay: index != null ? `${index * 40}ms` : undefined }}
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -121,9 +124,15 @@ export function ExperimentCard({ exp, tileCount, detectionCount, hasPanorama, in
               <span>{exp.scale} µm/px</span>
               <span>·</span>
               <span>{new Date(exp.createdAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })}</span>
+              {extraMeta}
             </div>
           </div>
           <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+            {onExport && (
+              <button className="icon-btn h-7 w-7" title="导出项目包" onClick={(e) => { e.stopPropagation(); onExport(); }}>
+                <Download size={12} />
+              </button>
+            )}
             <button className="icon-btn h-7 w-7" title="重命名" onClick={() => setEditing(true)}>
               <Pencil size={12} />
             </button>
